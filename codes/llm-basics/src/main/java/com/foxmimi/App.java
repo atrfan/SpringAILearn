@@ -5,12 +5,11 @@ import com.foxmimi.client.DeepSeekClient;
 import com.foxmimi.model.ChatMessage;
 import com.foxmimi.model.ChatRequest;
 
-import java.io.IOException;
 import java.util.List;
 
 public class App {
 
-    public static void main(String[] args) throws IOException, InterruptedException {
+    public static void main(String[] args) {
         String apiKey = System.getenv("DEEPSEEK_KEY");
 
         if (apiKey == null || apiKey.isBlank()) {
@@ -43,9 +42,12 @@ public class App {
         DeepSeekClient.CallResult result = client.chat(request);
 
         System.out.println("回答：" + result.response().answer());
+        System.out.println("模型：" + result.model());
         System.out.println("HTTP 状态：" + result.statusCode());
         System.out.println("耗时：" + result.elapsedMillis() + " ms");
-        System.out.println("总 Token：" +
-                result.response().usage().totalTokens());
+        System.out.println("输入 Token：" + result.promptTokens());
+        System.out.println("输出 Token：" + result.completionTokens());
+        System.out.println("总 Token：" + result.totalTokens());
+        System.out.println("调用成功：" + result.success());
     }
 }
