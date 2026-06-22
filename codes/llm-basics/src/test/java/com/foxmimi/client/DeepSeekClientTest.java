@@ -1,6 +1,7 @@
 package com.foxmimi.client;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.foxmimi.exception.LlmClientException;
 import com.foxmimi.exception.LlmErrorType;
 import com.foxmimi.model.ChatMessage;
@@ -38,12 +39,14 @@ class DeepSeekClientTest {
 
     private HttpServer server;
     private URI apiUri;
+    private String capturedRequestBody;
 
     /** 每个测试启动独立的本地服务，避免测试之间共享响应状态。 */
     @BeforeEach
     void startServer() throws IOException {
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.start();
+        capturedRequestBody = null;
         apiUri = URI.create(
                 "http://127.0.0.1:"
                         + server.getAddress().getPort()
@@ -84,6 +87,7 @@ class DeepSeekClientTest {
                 """);
 
         DeepSeekClient.CallResult result = createClient().chat(createRequest());
+        JsonNode requestJson = parseCapturedRequest();
 
         assertAll(
                 () -> assertEquals("deepseek-v4-pro", result.model()),
@@ -94,7 +98,35 @@ class DeepSeekClientTest {
                 () -> assertEquals(20, result.totalTokens()),
                 () -> assertTrue(result.success()),
                 () -> assertNotNull(result.response()),
-                () -> assertEquals("Hello", result.response().answer())
+                () -> assertEquals("Hello", result.response().answer()),
+                () -> assertTrue(requestJson.get("temperature").isNumber()),
+                () -> assertEquals(0.7, requestJson.get("temperature").asDouble()),
+                () -> assertTrue(requestJson.has("max_tokens")),
+                () -> assertFalse(requestJson.has("maxTokens")),
+                () -> assertTrue(requestJson.get("max_tokens").isIntegralNumber()),
+                () -> assertEquals(1024, requestJson.get("max_tokens").asInt())
+        );
+    }
+
+    @Test
+    void shouldRejectInvalidGenerationParameters() {
+        assertAll(
+                () -> assertThrows(
+                        IllegalArgumentException.class,
+                        () -> createRequest(-0.1, 1024)
+                ),
+                () -> assertThrows(
+                        IllegalArgumentException.class,
+                        () -> createRequest(2.1, 1024)
+                ),
+                () -> assertThrows(
+                        IllegalArgumentException.class,
+                        () -> createRequest(Double.NaN, 1024)
+                ),
+                () -> assertThrows(
+                        IllegalArgumentException.class,
+                        () -> createRequest(0.7, 0)
+                )
         );
     }
 
@@ -176,13 +208,28 @@ class DeepSeekClientTest {
 
     /** 创建所有测试共用的最小合法聊天请求。 */
     private ChatRequest createRequest() {
+        return createRequest(0.7, 1024);
+    }
+
+    private ChatRequest createRequest(Double temperature, Integer maxTokens) {
         return new ChatRequest(
                 "deepseek-v4-pro",
                 List.of(new ChatMessage("user", "Hello")),
+                temperature,
                 false,
+                maxTokens,
                 "high",
                 new ChatRequest.Thinking("enabled")
         );
+    }
+
+    private JsonNode parseCapturedRequest() {
+        assertNotNull(capturedRequestBody, "本地服务器没有收到请求体");
+        try {
+            return new ObjectMapper().readTree(capturedRequestBody);
+        } catch (IOException exception) {
+            throw new AssertionError("请求体不是有效 JSON", exception);
+        }
     }
 
     /**
@@ -196,13 +243,15 @@ class DeepSeekClientTest {
     }
 
     /** 将指定状态码和 UTF-8 JSON 内容写入本地 HTTP 响应。 */
-    private static void writeResponse(
+    private void writeResponse(
             HttpExchange exchange,
             int statusCode,
             String responseBody
     ) throws IOException {
-        // 读取并丢弃请求体，确保客户端可以完整结束请求发送过程。
-        exchange.getRequestBody().readAllBytes();
+        capturedRequestBody = new String(
+                exchange.getRequestBody().readAllBytes(),
+                StandardCharsets.UTF_8
+        );
 
         byte[] bodyBytes = responseBody.getBytes(StandardCharsets.UTF_8);
         exchange.getResponseHeaders().set(
