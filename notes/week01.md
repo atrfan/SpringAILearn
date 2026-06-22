@@ -1,8 +1,10 @@
 # 第 1 周学习笔记：LLM 基础与 Java 原生 API 客户端
 
-> **学习日期：** 2026-06-20  
-> **学习阶段：** 第 1 周 · 第 1～2 天  
-> **本节目标：** 理解 LLM 的基本概念，并使用 Java 21 原生 `HttpClient` 完成一次可观测的 DeepSeek API 调用。
+> **学习日期：** 2026-06-20～2026-06-22
+>
+> **学习阶段：** 第 1 周 · 第 1～3 天
+>
+> **本节目标：** 理解 LLM 的基本概念，并使用 Java 21 原生 `HttpClient` 实现可复用、可观测、可测试的 DeepSeek API 客户端。
 
 ## 目录
 
@@ -340,6 +342,10 @@ JSON reasoning_content ↔ Java reasoningContent
 
 类型相似不代表职责相同。DTO 应按协议方向和真实语义划分，而不是为了少写一个类而合并。
 
+相应的具体示例如图：
+
+![image-20260622153133531](./img/image-20260622153133531.png)
+
 ### 6.6 实际请求 JSON
 
 当前代码构造的请求近似为：
@@ -468,7 +474,19 @@ Unrecognized field "reasoning_content"
 
 ### 6.11 HTTP 状态与异常分类
 
-当前代码只做最小判断：非 2xx 状态统一抛出 `IllegalStateException`。这足以验证原型，但不足以支撑可靠客户端。
+第三天将原来统一抛出的 `IllegalStateException` 改为 `LlmClientException`。异常通过 `LlmErrorType` 表达稳定的故障类别，并保留可选的 HTTP 状态码、原始响应体和底层异常原因。上层无需解析异常字符串即可决定是否重试、告警或修正配置。
+
+当前分类如下：
+
+| `LlmErrorType` | 来源 | 默认可重试 |
+|---|---|---|
+| `AUTHENTICATION` | HTTP 401、403 | 否 |
+| `RATE_LIMIT` | HTTP 429 | 是 |
+| `SERVER_ERROR` | HTTP 5xx | 是 |
+| `REQUEST_TIMEOUT` | HTTP 408 或 `HttpTimeoutException` | 是 |
+| `NETWORK_ERROR` | `IOException`、线程中断 | 是 |
+| `RESPONSE_FORMAT` | 请求序列化或响应 JSON 解析失败 | 否 |
+| `CLIENT_ERROR` | 其他非 2xx 客户端错误 | 否 |
 
 | 故障 | 常见表现 | 是否通常适合重试 |
 |---|---|---|
@@ -494,6 +512,8 @@ Unrecognized field "reasoning_content"
 
 “发生异常就重试”不是容错，而是把确定性错误重复多次。
 
+`retryable` 目前只是错误类别的策略元数据，不表示客户端已经实现自动重试。把“允许考虑重试”和“立即执行重试”分开，可以避免认证错误、格式错误被无意义地重复调用。
+
 ### 6.12 耗时统计边界
 
 项目使用：
@@ -517,20 +537,57 @@ long elapsedMillis = (System.nanoTime() - start) / 1_000_000;
 | `completion_tokens` | `completionTokens` | 模型输出消耗的 Token |
 | `total_tokens` | `totalTokens` | 总 Token，通常是前两者之和 |
 
-当前入口只输出总 Token，后续实验应分别记录输入和输出 Token。否则总量增加时，无法判断是 Prompt 变长还是回答变长。推理 Token 的具体计入方式依模型和 API 而异，应以实际响应与官方说明为准。
+当前 `CallResult` 和程序入口已经分别输出模型、HTTP 状态、耗时、输入 Token、输出 Token、总 Token 和成功状态。这样才能判断成本变化来自 Prompt 变长还是回答变长。推理 Token 的具体计入方式依模型和 API 而异，应以实际响应与官方说明为准。
 
-### 6.14 当前完成度与技术债务
+### 6.14 可复用构造器与依赖注入
 
-当前项目已经完成最小真实调用，但仍是教学原型：
+客户端保留了只接收 API Key 的默认构造器，同时增加完整构造器，可注入：
 
-- 异常类型尚未细分；
-- `HttpClient`、`ObjectMapper` 和 URI 尚未通过构造器注入；
-- 没有 WireMock 自动化测试；
-- 没有有限重试与退避；
-- 没有结构化、脱敏的观测日志；
-- 没有验证空回答与结构缺失的区别。
+- API URI；
+- `HttpClient`；
+- `ObjectMapper`；
+- 请求超时时间。
 
-下一步应优先提升可测试性和错误分类，而不是继续堆叠更多模型参数。
+这不是为了增加构造器复杂度，而是把外部基础设施从业务逻辑中分离。生产代码使用默认配置，测试代码则可把 API URI 指向本地服务，从而避免真实网络、真实密钥和 Token 消耗。
+
+构造器同时校验 API Key、请求超时时间和注入依赖，避免把无效配置推迟到网络调用阶段才暴露。
+
+### 6.15 本地自动化测试
+
+测试使用 JDK 自带的 `HttpServer` 在随机本地端口模拟响应，没有访问真实 DeepSeek API。当前覆盖五个场景：
+
+1. HTTP 200 正常响应，并验证模型、状态码、耗时、三类 Token、成功状态和回答；
+2. HTTP 401 映射为不可重试的认证错误；
+3. HTTP 429 映射为可重试的限流错误；
+4. HTTP 503 映射为可重试的服务端错误；
+5. HTTP 200 但响应体不是合法 JSON，映射为不可重试的响应格式错误。
+
+2026-06-22 执行结果：
+
+```text
+Tests run: 5, Failures: 0, Errors: 0, Skipped: 0
+BUILD SUCCESS
+```
+
+本轮没有使用 WireMock。JDK `HttpServer` 足以验证当前最小行为；第六天需要模拟延迟、缺字段、更多状态和重试次数时，再引入 WireMock 更合适。
+
+### 6.16 第三天完成度与技术债务
+
+已完成：
+
+- API URI、`HttpClient`、`ObjectMapper` 和请求超时可注入；
+- 认证、限流、服务端、请求超时、网络、格式和普通客户端错误可分类；
+- 输入、输出、总 Token 及耗时可读取；
+- 本地测试不依赖真实 API Key，不产生 Token 费用；
+- JUnit 测试可由 Maven Surefire 发现并执行。
+
+仍未完成：
+
+- 没有有限重试、指数退避、抖动和 `Retry-After` 处理；
+- 没有结构化、脱敏的观测日志，目前主要由 `App` 输出结果；
+- 没有测试连接超时、请求超时、网络中断、HTTP 408 和其他 4xx；
+- 没有严格区分空回答与 `choices`、`message`、`usage` 等关键结构缺失；
+- 异常仍保存原始响应体，调用方必须避免未经脱敏直接写入日志。
 
 ---
 
@@ -552,6 +609,9 @@ long elapsedMillis = (System.nanoTime() - start) / 1_000_000;
 14. `System.nanoTime()` 适合测量持续时间，但实验必须保持计时边界一致。
 15. 只记录总 Token 不足以分析成本与长度变化，必须区分输入和输出 Token。
 16. 重试必须基于故障类型；401、400 和 JSON 映射错误不应盲目重试。
+17. 依赖注入使真实 API 地址和本地测试服务可替换，是客户端可测试性的前提。
+18. 可重试标记只是策略信息，自动重试还必须有次数、退避、抖动和幂等性约束。
+19. 本地模拟测试可以验证协议行为，但不能替代少量受控的真实 API 集成验证。
 
 ## 8. 自测问题
 
@@ -572,6 +632,9 @@ long elapsedMillis = (System.nanoTime() - start) / 1_000_000;
 - [ ] 我能否解释为什么使用 `System.nanoTime()` 测量耗时？
 - [ ] 我能否区分输入、输出和总 Token？
 - [ ] 我能否判断 400、401、429、503 和 JSON 映射错误是否适合重试？
+- [ ] 我能否解释为什么 API URI、HttpClient、ObjectMapper 和超时时间需要支持注入？
+- [ ] 我能否说明 `retryable = true` 为什么不等于可以无限重试？
+- [ ] 我能否解释本地 HTTP 测试能验证什么、不能验证什么？
 
 ## 9. 参考资料
 

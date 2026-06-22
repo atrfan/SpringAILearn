@@ -20,16 +20,18 @@ Java 请求对象
 - 启用推理模式并设置推理强度；
 - 使用 Bearer Token 完成身份认证；
 - 解析普通回答和 `reasoning_content`；
-- 记录 HTTP 状态码、调用耗时和 Token 用量；
-- 对非 2xx HTTP 响应进行基础判断。
+- 记录模型、HTTP 状态码、调用耗时、输入/输出/总 Token 和成功状态；
+- 通过统一异常分类认证、限流、服务端、超时、网络和响应格式错误；
+- 注入 API URI、`HttpClient`、`ObjectMapper` 和请求超时配置；
+- 使用 JDK 本地 HTTP Server 完成正常响应及典型失败场景测试。
 
 当前项目尚未实现：
 
-- 401、429、5xx、超时等错误的细粒度异常分类；
 - 自动重试与退避策略；
-- WireMock 模拟测试；
+- 完整的 WireMock 故障模拟；
 - 流式响应；
-- 请求和响应日志脱敏；
+- 结构化的请求和响应脱敏日志；
+- 对响应关键字段缺失的严格校验；
 - 多轮对话状态管理。
 
 因此，它目前是一个教学用最小客户端，不是可直接用于生产环境的 SDK。
@@ -54,15 +56,20 @@ mvn -version
 llm-basics/
 ├── pom.xml
 ├── README.md
-└── src/main/java/com/foxmimi/
-    ├── App.java
-    ├── client/
-    │   └── DeepSeekClient.java
-    └── model/
-        ├── ChatMessage.java
-        ├── ChatRequest.java
-        ├── AssistantMessage.java
-        └── ChatResponse.java
+├── src/main/java/com/foxmimi/
+│   ├── App.java
+│   ├── client/
+│   │   └── DeepSeekClient.java
+│   ├── exception/
+│   │   ├── LlmClientException.java
+│   │   └── LlmErrorType.java
+│   └── model/
+│       ├── ChatMessage.java
+│       ├── ChatRequest.java
+│       ├── AssistantMessage.java
+│       └── ChatResponse.java
+└── src/test/java/com/foxmimi/client/
+    └── DeepSeekClientTest.java
 ```
 
 各类的职责如下：
@@ -71,6 +78,8 @@ llm-basics/
 |---|---|
 | `App` | 程序入口，读取配置、构造请求、调用客户端并输出结果 |
 | `DeepSeekClient` | JSON 转换、HTTP 请求、状态判断、耗时统计和响应解析 |
+| `LlmClientException` | 统一封装错误类别、状态码、响应体和底层异常 |
+| `LlmErrorType` | 定义稳定故障类别及其默认可重试属性 |
 | `ChatMessage` | 描述发送给模型的单条请求消息 |
 | `ChatRequest` | 描述完整的请求 JSON |
 | `AssistantMessage` | 描述模型返回的 assistant 消息，包括推理内容 |
@@ -112,10 +121,24 @@ mvn compile
 
 ```text
 回答：...
+模型：deepseek-v4-pro
 HTTP 状态：200
 耗时：... ms
+输入 Token：...
+输出 Token：...
 总 Token：...
+调用成功：true
 ```
+
+### 4. 测试
+
+测试使用本机随机端口，不调用真实 DeepSeek API，也不需要真实 API Key：
+
+```powershell
+mvn test
+```
+
+2026-06-22 验证结果：5 个测试全部通过，无失败、错误或跳过项。
 
 ## 请求对象与 JSON
 
@@ -323,26 +346,29 @@ https://api.deepseek.com/chat/completions
 
 ## 响应状态和异常
 
-HTTP 状态码在 200 到 299 之间时，当前代码认为请求成功：
+HTTP 状态码在 200 到 299 之间时进入响应解析；其他状态由 `LlmErrorType` 分类：
 
 ```java
-if (statusCode < 200 || statusCode >= 300) {
-    throw new IllegalStateException(...);
-}
+case 401, 403 -> AUTHENTICATION;
+case 408 -> REQUEST_TIMEOUT;
+case 429 -> RATE_LIMIT;
+default -> statusCode >= 500 && statusCode <= 599
+        ? SERVER_ERROR
+        : CLIENT_ERROR;
 ```
 
 常见失败类型包括：
 
 | 类型 | 常见表现 | 当前处理情况 |
 |---|---|---|
-| 认证失败 | HTTP 401 | 统一抛出 `IllegalStateException` |
-| 限流 | HTTP 429 | 统一抛出 `IllegalStateException` |
-| 服务端故障 | HTTP 5xx | 统一抛出 `IllegalStateException` |
-| 网络或读取失败 | `IOException` | 由 `main` 向上抛出 |
-| 线程被中断 | `InterruptedException` | 由 `main` 向上抛出 |
-| JSON 结构不匹配 | Jackson 映射异常 | 作为 `IOException` 子类向上抛出 |
+| 认证失败 | HTTP 401、403 | `AUTHENTICATION`，不可重试 |
+| 限流 | HTTP 429 | `RATE_LIMIT`，可考虑有限重试 |
+| 服务端故障 | HTTP 5xx | `SERVER_ERROR`，可考虑有限重试 |
+| 请求超时 | HTTP 408、`HttpTimeoutException` | `REQUEST_TIMEOUT` |
+| 网络或读取失败 | `IOException` | `NETWORK_ERROR` |
+| JSON 结构不匹配 | Jackson 映射异常 | `RESPONSE_FORMAT`，不可重试 |
 
-当前统一使用 `IllegalStateException` 只能满足最小演示。后续应建立认证、限流、服务端错误、超时和响应格式错误等独立异常类型，并只对适合重试的错误执行有限重试。
+所有类别统一封装为 `LlmClientException`。`retryable()` 只提供策略信息，客户端目前不会自动重试。异常中的原始响应体可能包含敏感数据，不能未经脱敏直接记录。
 
 ## 耗时统计
 
@@ -375,7 +401,7 @@ long elapsedMillis = (System.nanoTime() - start) / 1_000_000;
 
 Token 不是字符数，也不等同于单词数。模型会先通过 tokenizer 把文本切分成 Token。中文字符、英文单词、数字和标点的切分方式不同，因此不能用字符串长度准确推算 Token 数。
 
-当前代码只输出 `totalTokens()`。做实验时应分别记录输入和输出 Token，否则无法判断成本变化来自提示词还是模型回答。
+当前 `CallResult` 已分别提供 `promptTokens()`、`completionTokens()` 和 `totalTokens()`。做实验时应分别记录三者，否则无法判断成本变化来自提示词还是模型回答。
 
 ## ChatResponse 的安全读取
 
@@ -415,11 +441,11 @@ response.reasoningContent();
 
 建议按以下顺序继续扩展：
 
-1. 为 401、429、5xx、超时和 JSON 格式错误定义独立异常；
-2. 将 API URI、`HttpClient` 和 `ObjectMapper` 通过构造器注入，便于测试；
-3. 使用 WireMock 编写成功响应和失败场景测试；
-4. 只对 429、部分 5xx 和暂时性网络错误进行有限重试；
-5. 记录模型、HTTP 状态、输入/输出 Token 和耗时，但禁止记录 API Key；
+1. 严格校验 `choices`、`message`、`content` 和 `usage` 等关键响应字段；
+2. 使用 WireMock 扩展超时、缺字段和更多 HTTP 状态测试；
+3. 只对 429、部分 5xx 和暂时性网络错误实现有限重试；
+4. 加入指数退避、随机抖动并处理 `Retry-After`；
+5. 增加结构化、脱敏日志，禁止记录 API Key 和未脱敏响应；
 6. 增加参数对照实验，并把每次结果保存为 CSV。
 
-这些改进完成后，客户端才具备可复用、可测试和可观测的基本结构。
+这些改进完成后，客户端将从教学原型进一步接近可用于真实工程的可靠客户端。
