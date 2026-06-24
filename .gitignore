@@ -3,6 +3,9 @@ target/
 build/
 out/
 
+# Local Trellis workflow state
+.trellis/
+
 # IDE metadata
 .idea/
 .vscode/
