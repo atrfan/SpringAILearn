@@ -1,0 +1,23 @@
+spring:
+  application:
+    name: spring-ai-chat
+  ai:
+    openai:
+      api-key: ${DEEPSEEK_KEY}
+      base-url: https://api.deepseek.com
+      chat:
+        model: deepseek-v4-pro
+        temperature: 0.0
+#    这里配置阿里云百炼的
+#    openai:
+#      base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
+#      chat:
+#        model: deepseek-v4-pro
+#        temperature: 0.8 # 模型温度，值越大，输出结果越随机，范围在0-1之间
+#      api-key: sk-xxxx
+logging:
+  level:
+    org.springframework.ai.chat.client.advisor: DEBUG
+    com.foxmimi.springaidemo: DEBUG
+server:
+  port: 8080
