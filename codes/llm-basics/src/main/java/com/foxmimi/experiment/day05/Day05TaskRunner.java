@@ -1,6 +1,7 @@
 package com.foxmimi.experiment.day05;
 
 import com.foxmimi.client.DeepSeekClient;
+import com.foxmimi.client.LlmChatClient;
 import com.foxmimi.exception.LlmClientException;
 import com.foxmimi.experiment.EvaluationOutcome;
 import com.foxmimi.experiment.ExperimentCase;
@@ -31,7 +32,7 @@ import java.util.List;
 public final class Day05TaskRunner {
 
     /** DeepSeek API 客户端。 */
-    private final DeepSeekClient client;
+    private final LlmChatClient client;
     /** 评价器，用于判断回答正确性。 */
     private final ExperimentEvaluator evaluator;
     /** CSV 写入器，用于持久化结果。 */
@@ -48,7 +49,7 @@ public final class Day05TaskRunner {
      * @param delayBetweenCalls 调用间隔
      */
     public Day05TaskRunner(
-            DeepSeekClient client,
+            LlmChatClient client,
             ExperimentEvaluator evaluator,
             Day05CsvWriter csvWriter,
             Duration delayBetweenCalls
@@ -72,7 +73,7 @@ public final class Day05TaskRunner {
      * @param client            API 客户端
      * @param delayBetweenCalls 调用间隔
      */
-    public Day05TaskRunner(DeepSeekClient client, Duration delayBetweenCalls) {
+    public Day05TaskRunner(LlmChatClient client, Duration delayBetweenCalls) {
         this(client, new ExperimentEvaluator(), new Day05CsvWriter(), delayBetweenCalls);
     }
 

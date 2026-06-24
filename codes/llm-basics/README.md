@@ -23,15 +23,19 @@ Java 请求对象
 - 记录模型、HTTP 状态码、调用耗时、输入/输出/总 Token 和成功状态；
 - 通过统一异常分类认证、限流、服务端、超时、网络和响应格式错误；
 - 注入 API URI、`HttpClient`、`ObjectMapper` 和请求超时配置；
-- 使用 JDK 本地 HTTP Server 完成正常响应及典型失败场景测试。
+- 严格校验响应关键字段及 Token 用量一致性；
+- 对 408、429、5xx、请求超时和临时网络错误执行有限重试；
+- 支持指数退避、随机抖动以及 `Retry-After`；
+- 记录端到端耗时和总尝试次数；
+- 使用 JDK 本地 HTTP Server 和 WireMock 完成正常响应及故障场景测试；
+- 保存 Day04 参数实验和 Day05 固定任务实验的原始 CSV 与分析结果。
 
 当前项目尚未实现：
 
-- 自动重试与退避策略；
-- 完整的 WireMock 故障模拟；
 - 流式响应；
 - 结构化的请求和响应脱敏日志；
-- 对响应关键字段缺失的严格校验；
+- 端到端重试总时间预算；
+- 带外部副作用操作的幂等机制；
 - 多轮对话状态管理。
 
 因此，它目前是一个教学用最小客户端，不是可直接用于生产环境的 SDK。
@@ -59,7 +63,11 @@ llm-basics/
 ├── src/main/java/com/foxmimi/
 │   ├── App.java
 │   ├── client/
-│   │   └── DeepSeekClient.java
+│   │   ├── DeepSeekClient.java
+│   │   ├── LlmChatClient.java
+│   │   ├── RetryingChatClient.java
+│   │   ├── RetryPolicy.java
+│   │   └── RetryDecision.java
 │   ├── exception/
 │   │   ├── LlmClientException.java
 │   │   └── LlmErrorType.java
@@ -77,8 +85,11 @@ llm-basics/
 | 类 | 职责 |
 |---|---|
 | `App` | 程序入口，读取配置、构造请求、调用客户端并输出结果 |
-| `DeepSeekClient` | JSON 转换、HTTP 请求、状态判断、耗时统计和响应解析 |
-| `LlmClientException` | 统一封装错误类别、状态码、响应体和底层异常 |
+| `DeepSeekClient` | JSON 转换、单次 HTTP 请求、状态判断、响应校验和解析 |
+| `LlmChatClient` | 统一原始客户端与重试客户端的调用边界 |
+| `RetryingChatClient` | 有限重试、退避、`Retry-After`、尝试次数和端到端耗时 |
+| `RetryPolicy` | 最大尝试次数、基础延迟、最大延迟和抖动计算 |
+| `LlmClientException` | 封装错误类别、状态码、响应体、重试等待和尝试次数 |
 | `LlmErrorType` | 定义稳定故障类别及其默认可重试属性 |
 | `ChatMessage` | 描述发送给模型的单条请求消息 |
 | `ChatRequest` | 描述完整的请求 JSON |
@@ -128,6 +139,7 @@ HTTP 状态：200
 输出 Token：...
 总 Token：...
 调用成功：true
+总尝试次数：1
 ```
 
 ### 4. 测试
@@ -138,7 +150,14 @@ HTTP 状态：200
 mvn test
 ```
 
-2026-06-22 验证结果：5 个测试全部通过，无失败、错误或跳过项。
+2026-06-24 验证结果：
+
+```text
+Tests run: 34, Failures: 0, Errors: 0, Skipped: 0
+BUILD SUCCESS
+```
+
+其中 17 项 WireMock 测试覆盖 400、401、408、429、500、503、请求超时、非法 JSON、关键字段缺失、瞬态故障恢复、`Retry-After` 和线程中断。测试不调用真实 API。
 
 ## 请求对象与 JSON
 
@@ -368,7 +387,7 @@ default -> statusCode >= 500 && statusCode <= 599
 | 网络或读取失败 | `IOException` | `NETWORK_ERROR` |
 | JSON 结构不匹配 | Jackson 映射异常 | `RESPONSE_FORMAT`，不可重试 |
 
-所有类别统一封装为 `LlmClientException`。`retryable()` 只提供策略信息，客户端目前不会自动重试。异常中的原始响应体可能包含敏感数据，不能未经脱敏直接记录。
+所有类别统一封装为 `LlmClientException`。`retryable()` 提供错误类别的默认策略信息，`RetryingChatClient` 只对可重试错误执行有限重试。异常中的原始响应体可能包含敏感数据，不能未经脱敏直接记录。
 
 ## 耗时统计
 
@@ -405,7 +424,7 @@ Token 不是字符数，也不等同于单词数。模型会先通过 tokenizer 
 
 ## ChatResponse 的安全读取
 
-服务端可能返回空 `choices`、空 `message` 或空 `content`。直接执行：
+服务端可能返回空 `choices`、空 `message`、空 `content` 或缺少 `usage`。直接执行：
 
 ```java
 choices.getFirst().message().content()
@@ -418,9 +437,7 @@ response.answer();
 response.reasoningContent();
 ```
 
-这两个方法会进行必要的空值检查，并在内容不存在时返回空字符串。
-
-返回空字符串虽然能避免程序崩溃，但也可能掩盖异常响应。后续更严格的客户端应区分“模型确实返回空内容”和“响应结构缺失”两种情况。
+这两个方法会进行必要的空值检查。`DeepSeekClient` 还会在结果进入业务层前验证关键字段；协议结构缺失会映射为不可重试的 `RESPONSE_FORMAT`，不会伪装成正常空回答。
 
 ## 复习时应掌握的问题
 
@@ -441,11 +458,11 @@ response.reasoningContent();
 
 建议按以下顺序继续扩展：
 
-1. 严格校验 `choices`、`message`、`content` 和 `usage` 等关键响应字段；
-2. 使用 WireMock 扩展超时、缺字段和更多 HTTP 状态测试；
-3. 只对 429、部分 5xx 和暂时性网络错误实现有限重试；
-4. 加入指数退避、随机抖动并处理 `Retry-After`；
-5. 增加结构化、脱敏日志，禁止记录 API Key 和未脱敏响应；
-6. 增加参数对照实验，并把每次结果保存为 CSV。
+1. 增加结构化、脱敏日志和调用指标；
+2. 为多次超时增加端到端重试总时间预算；
+3. 记录 `finish_reason` 和供应商提供的推理 Token 明细；
+4. 为带外部副作用的调用设计幂等机制；
+5. 实现异步和流式响应，并测试客户端取消；
+6. 使用 Spring AI 重建同步和流式接口，与原生客户端进行对照。
 
 这些改进完成后，客户端将从教学原型进一步接近可用于真实工程的可靠客户端。

@@ -15,6 +15,10 @@ import java.net.http.HttpResponse;
 import java.net.http.HttpTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 import java.util.Objects;
 
 /**
@@ -23,7 +27,7 @@ import java.util.Objects;
  * <p>客户端支持注入 API 地址、HTTP 客户端、JSON 映射器和请求超时时间，
  * 因而既能使用默认生产配置，也能在测试中连接 WireMock 等本地服务。</p>
  */
-public final class DeepSeekClient {
+public final class DeepSeekClient implements LlmChatClient {
 
     /** DeepSeek Chat Completions API 的默认生产地址。 */
     private static final URI DEFAULT_API_URI =
@@ -96,6 +100,7 @@ public final class DeepSeekClient {
      * @return HTTP 状态、调用耗时和模型响应
      * @throws LlmClientException 请求、网络或响应解析失败时抛出
      */
+    @Override
     public CallResult chat(ChatRequest chatRequest) {
         Objects.requireNonNull(chatRequest, "聊天请求不能为空");
 
@@ -181,6 +186,7 @@ public final class DeepSeekClient {
                     exception
             );
         }
+        validateResponse(response, httpResponse.statusCode(), httpResponse.body());
 
         return new CallResult(
                 response.model(),
@@ -190,6 +196,7 @@ public final class DeepSeekClient {
                 response.usage().completionTokens(),
                 response.usage().totalTokens(),
                 true,
+                1,
                 response
         );
     }
@@ -208,13 +215,89 @@ public final class DeepSeekClient {
     ) {
         int statusCode = response.statusCode();
 
+        Duration retryAfter = response.headers()
+                .firstValue("Retry-After")
+                .map(value -> parseRetryAfter(value, Instant.now()))
+                .orElse(null);
+
         return new LlmClientException(
                 classify(statusCode),
                 "LLM API 调用失败，HTTP 状态码：" + statusCode,
                 statusCode,
                 response.body(),
+                retryAfter,
                 null
         );
+    }
+
+    /**
+     * 解析 Retry-After 头的值。
+     *
+     * <p>HTTP 规范允许 Retry-After 为整数秒数或 HTTP 日期。
+     * 同时支持整数秒和 RFC 1123 HTTP 日期。已过期或非法值返回 {@code null}。</p>
+     */
+    static Duration parseRetryAfter(String value, Instant now) {
+        if (value == null || now == null) {
+            return null;
+        }
+        try {
+            long seconds = Long.parseLong(value.trim());
+            return seconds >= 0 ? Duration.ofSeconds(seconds) : null;
+        } catch (NumberFormatException exception) {
+            try {
+                Instant retryAt = ZonedDateTime.parse(
+                        value.trim(),
+                        DateTimeFormatter.RFC_1123_DATE_TIME
+                ).toInstant();
+                Duration delay = Duration.between(now, retryAt);
+                return delay.isNegative() || delay.isZero() ? null : delay;
+            } catch (DateTimeParseException ignored) {
+                return null;
+            }
+        }
+    }
+
+    private static void validateResponse(
+            ChatResponse response,
+            int statusCode,
+            String responseBody
+    ) {
+        String invalidReason = null;
+        if (response == null) {
+            invalidReason = "响应对象为空";
+        } else if (response.model() == null || response.model().isBlank()) {
+            invalidReason = "缺少 model";
+        } else if (response.choices() == null || response.choices().isEmpty()) {
+            invalidReason = "缺少 choices";
+        } else if (response.choices().getFirst().message() == null) {
+            invalidReason = "缺少 choices[0].message";
+        } else if (response.choices().getFirst().message().content() == null
+                || response.choices().getFirst().message().content().isBlank()) {
+            invalidReason = "缺少 choices[0].message.content";
+        } else if (response.usage() == null) {
+            invalidReason = "缺少 usage";
+        } else if (response.usage().promptTokens() == null
+                || response.usage().completionTokens() == null
+                || response.usage().totalTokens() == null) {
+            invalidReason = "usage Token 字段不完整";
+        } else if (response.usage().promptTokens() < 0
+                || response.usage().completionTokens() < 0
+                || response.usage().totalTokens() < 0) {
+            invalidReason = "usage Token 字段不能为负数";
+        } else if (response.usage().totalTokens()
+                != response.usage().promptTokens() + response.usage().completionTokens()) {
+            invalidReason = "usage.total_tokens 与输入输出 Token 之和不一致";
+        }
+
+        if (invalidReason != null) {
+            throw new LlmClientException(
+                    LlmErrorType.RESPONSE_FORMAT,
+                    "LLM API 响应缺少关键字段：" + invalidReason,
+                    statusCode,
+                    responseBody,
+                    null
+            );
+        }
     }
 
     /**
@@ -244,6 +327,27 @@ public final class DeepSeekClient {
             int completionTokens,
             int totalTokens,
             boolean success,
+            int attempts,
             ChatResponse response
-    ) {}
+    ) {
+        public CallResult {
+            if (attempts < 1) {
+                throw new IllegalArgumentException("attempts 必须大于等于 1");
+            }
+        }
+
+        public CallResult withRetryMetadata(int attempts, long elapsedMillis) {
+            return new CallResult(
+                    model,
+                    statusCode,
+                    elapsedMillis,
+                    promptTokens,
+                    completionTokens,
+                    totalTokens,
+                    success,
+                    attempts,
+                    response
+            );
+        }
+    }
 }

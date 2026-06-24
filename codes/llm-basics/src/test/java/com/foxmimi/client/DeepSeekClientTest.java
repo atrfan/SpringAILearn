@@ -97,6 +97,7 @@ class DeepSeekClientTest {
                 () -> assertEquals(8, result.completionTokens()),
                 () -> assertEquals(20, result.totalTokens()),
                 () -> assertTrue(result.success()),
+                () -> assertEquals(1, result.attempts()),
                 () -> assertNotNull(result.response()),
                 () -> assertEquals("Hello", result.response().answer()),
                 () -> assertTrue(requestJson.get("temperature").isNumber()),

@@ -1,6 +1,7 @@
 package com.foxmimi;
 
 import com.foxmimi.client.DeepSeekClient;
+import com.foxmimi.client.RetryingChatClient;
 import com.foxmimi.experiment.Day04ExperimentAnalyzer;
 import com.foxmimi.experiment.Day04ExperimentPlans;
 import com.foxmimi.experiment.Day04ExperimentRunner;
@@ -45,7 +46,7 @@ public final class Day04ExperimentApp {
                 maxOutputTokens
         );
         Day04ExperimentRunner runner = new Day04ExperimentRunner(
-                new DeepSeekClient(apiKey),
+                new RetryingChatClient(new DeepSeekClient(apiKey)),
                 Duration.ofMillis(delayMillis)
         );
         List<ExperimentResult> results = runner.run(plans, csvPath);

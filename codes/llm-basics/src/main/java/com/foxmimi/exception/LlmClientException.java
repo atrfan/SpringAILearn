@@ -1,5 +1,7 @@
 package com.foxmimi.exception;
 
+import java.time.Duration;
+
 /**
  * LLM 客户端的统一运行时异常。
  *
@@ -21,6 +23,15 @@ public final class LlmClientException extends RuntimeException {
     private final String responseBody;
 
     /**
+     * 服务端通过 Retry-After 响应头建议的等待时间；
+     * 未提供时返回 {@code null}。429 和部分 5xx 响应可能携带此字段。
+     */
+    private final Duration retryAfter;
+
+    /** 当前调用链实际执行的总尝试次数。 */
+    private final int attempts;
+
+    /**
      * 创建统一客户端异常。
      *
      * @param type         错误类别
@@ -36,10 +47,51 @@ public final class LlmClientException extends RuntimeException {
             String responseBody,
             Throwable cause
     ) {
+        this(type, message, statusCode, responseBody, null, 1, cause);
+    }
+
+    /**
+     * 创建包含 Retry-After 信息的统一客户端异常。
+     *
+     * @param type              错误类别
+     * @param message           面向调用方的错误说明
+     * @param statusCode        HTTP 状态码
+     * @param responseBody      服务端原始响应体
+     * @param retryAfter        Retry-After 建议的等待时间，未提供时为 {@code null}
+     * @param cause             原始异常
+     */
+    public LlmClientException(
+            LlmErrorType type,
+            String message,
+            Integer statusCode,
+            String responseBody,
+            Duration retryAfter,
+            Throwable cause
+    ) {
+        this(type, message, statusCode, responseBody, retryAfter, 1, cause);
+    }
+
+    public LlmClientException(
+            LlmErrorType type,
+            String message,
+            Integer statusCode,
+            String responseBody,
+            Duration retryAfter,
+            int attempts,
+            Throwable cause
+    ) {
         super(message, cause);
+        if (type == null) {
+            throw new IllegalArgumentException("错误类型不能为空");
+        }
+        if (attempts < 1) {
+            throw new IllegalArgumentException("attempts 必须大于等于 1");
+        }
         this.type = type;
         this.statusCode = statusCode;
         this.responseBody = responseBody;
+        this.retryAfter = retryAfter;
+        this.attempts = attempts;
     }
 
     /** @return 错误类别 */
@@ -66,5 +118,29 @@ public final class LlmClientException extends RuntimeException {
      */
     public boolean retryable() {
         return type.retryable();
+    }
+
+    /**
+     * @return Retry-After 建议的等待时间；未提供时返回 {@code null}
+     */
+    public Duration retryAfter() {
+        return retryAfter;
+    }
+
+    /** @return 本次调用链实际执行的总尝试次数，未进入重试包装器时为 1 */
+    public int attempts() {
+        return attempts;
+    }
+
+    public LlmClientException withAttempts(int attempts) {
+        return new LlmClientException(
+                type,
+                getMessage(),
+                statusCode,
+                responseBody,
+                retryAfter,
+                attempts,
+                getCause()
+        );
     }
 }

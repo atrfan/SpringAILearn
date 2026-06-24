@@ -1,6 +1,7 @@
 package com.foxmimi.experiment;
 
 import com.foxmimi.client.DeepSeekClient;
+import com.foxmimi.client.LlmChatClient;
 import com.foxmimi.exception.LlmClientException;
 
 import java.io.IOException;
@@ -18,7 +19,7 @@ import java.util.List;
 public final class Day04ExperimentRunner {
 
     /** DeepSeek API 客户端。 */
-    private final DeepSeekClient client;
+    private final LlmChatClient client;
     /** 请求工厂，用于构建 ChatRequest。 */
     private final ExperimentRequestFactory requestFactory;
     /** 评价器，用于判断回答正确性。 */
@@ -33,7 +34,7 @@ public final class Day04ExperimentRunner {
      *
      * @param client DeepSeek API 客户端
      */
-    public Day04ExperimentRunner(DeepSeekClient client) {
+    public Day04ExperimentRunner(LlmChatClient client) {
         this(client, Duration.ZERO);
     }
 
@@ -44,7 +45,7 @@ public final class Day04ExperimentRunner {
      * @param delayBetweenCalls 调用间隔，避免触发限流
      */
     public Day04ExperimentRunner(
-            DeepSeekClient client,
+            LlmChatClient client,
             Duration delayBetweenCalls
     ) {
         this(
@@ -58,7 +59,7 @@ public final class Day04ExperimentRunner {
 
     /** 包级私有构造器，支持依赖注入（便于测试）。 */
     Day04ExperimentRunner(
-            DeepSeekClient client,
+            LlmChatClient client,
             ExperimentRequestFactory requestFactory,
             ExperimentEvaluator evaluator,
             CsvExperimentResultWriter csvWriter,

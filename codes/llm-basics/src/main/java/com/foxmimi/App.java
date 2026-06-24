@@ -2,11 +2,16 @@ package com.foxmimi;
 
 
 import com.foxmimi.client.DeepSeekClient;
+import com.foxmimi.client.LlmChatClient;
+import com.foxmimi.client.RetryingChatClient;
 import com.foxmimi.model.ChatMessage;
 import com.foxmimi.model.ChatRequest;
 
 import java.util.List;
 
+/**
+ * 应用入口：演示使用带有限重试的客户端调用 DeepSeek Chat API。
+ */
 public class App {
 
     public static void main(String[] args) {
@@ -22,9 +27,9 @@ public class App {
         System.out.println("DEEPSEEK_KEY 已读取");
 
         Double temperature = 0.7;
-
         Integer maxTokens = 1024;
 
+        // 构建包含系统提示和用户消息的聊天请求
         ChatRequest request = new ChatRequest(
                 "deepseek-v4-pro",
                 List.of(
@@ -43,9 +48,12 @@ public class App {
                 "high",
                 new ChatRequest.Thinking("enabled")
         );
-        DeepSeekClient client = new DeepSeekClient(apiKey);
+        // 使用 RetryingChatClient 包装 DeepSeekClient，提供有限重试能力
+        LlmChatClient client = new RetryingChatClient(new DeepSeekClient(apiKey));
 
         DeepSeekClient.CallResult result = client.chat(request);
+
+        // 输出调用结果，包括模型响应、用量和重试元数据
 
         System.out.println("temperature: " + temperature);
         System.out.println("回答：" + result.response().answer());
@@ -57,5 +65,6 @@ public class App {
         System.out.println("输出 Token：" + result.completionTokens());
         System.out.println("总 Token：" + result.totalTokens());
         System.out.println("调用成功：" + result.success());
+        System.out.println("总尝试次数：" + result.attempts());
     }
 }

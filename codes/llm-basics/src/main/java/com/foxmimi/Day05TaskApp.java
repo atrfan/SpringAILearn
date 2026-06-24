@@ -1,6 +1,7 @@
 package com.foxmimi;
 
 import com.foxmimi.client.DeepSeekClient;
+import com.foxmimi.client.RetryingChatClient;
 import com.foxmimi.experiment.ExperimentCase;
 import com.foxmimi.experiment.day05.Day05Analyzer;
 import com.foxmimi.experiment.day05.Day05AnalysisReportWriter;
@@ -81,7 +82,7 @@ public final class Day05TaskApp {
 
         // 4. 执行所有任务
         Day05TaskRunner runner = new Day05TaskRunner(
-                new DeepSeekClient(apiKey),
+                new RetryingChatClient(new DeepSeekClient(apiKey)),
                 Duration.ofMillis(delayMillis)
         );
         List<Day05TaskResult> results = runner.run(
