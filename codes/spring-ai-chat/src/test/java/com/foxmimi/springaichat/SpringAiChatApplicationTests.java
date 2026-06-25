@@ -1,5 +1,6 @@
 package com.foxmimi.springaichat;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
 
@@ -9,6 +10,7 @@ import org.springframework.boot.test.context.SpringBootTest;
  * 验证应用能否正常启动，所有 Bean 能否正确装配。
  * </p>
  */
+@Tag("integration")
 @SpringBootTest
 class SpringAiChatApplicationTests {
 

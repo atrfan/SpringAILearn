@@ -2,12 +2,16 @@ package com.foxmimi.springaichat.controller;
 
 import com.foxmimi.springaichat.model.ChatResponse;
 import com.foxmimi.springaichat.service.MyChatService;
+import com.foxmimi.springaichat.service.UpstreamResponseException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.ai.retry.NonTransientAiException;
 import org.springframework.ai.retry.TransientAiException;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+
+import java.net.SocketTimeoutException;
 
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -33,6 +37,8 @@ class ChatControllerTest {
      */
     @BeforeEach
     void setUp() {
+        // 用 Mockito 的 mock() 创建一个 MyChatService 的假对象，不启动 Spring 容器、不连接真实 AI 服务。
+        // 通过 when(...).thenReturn(...) 或 thenThrow(...) 精确控制它的行为，从而单独测试 Controller 层的逻辑（参数校验、异常映射等）。
         chatService = mock(MyChatService.class);
         mockMvc = MockMvcBuilders
                 .standaloneSetup(new ChatController(chatService))
@@ -102,5 +108,86 @@ class ChatControllerTest {
                                 """))
                 .andExpect(status().isServiceUnavailable())
                 .andExpect(jsonPath("$.code").value("UPSTREAM_UNAVAILABLE"));
+    }
+
+    /**
+     * 测试 AI 服务非瞬时故障：当模型服务抛出 NonTransientAiException 时，
+     * 应返回 502 Bad Gateway 并携带 UPSTREAM_ERROR 错误码
+     */
+    @Test
+    void mapsNonTransientAiExceptionToBadGateway() throws Exception {
+        when(chatService.chat("hello")).thenThrow(new NonTransientAiException("auth failed"));
+
+        mockMvc.perform(post("/api/chat")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"message":"hello"}
+                                """))
+                .andExpect(status().isBadGateway())
+                .andExpect(jsonPath("$.code").value("UPSTREAM_ERROR"));
+    }
+
+    /**
+     * 测试上游响应异常：当服务层抛出 UpstreamResponseException 时，
+     * 应返回 502 Bad Gateway 并携带 UPSTREAM_ERROR 错误码
+     */
+    @Test
+    void mapsUpstreamResponseExceptionToBadGateway() throws Exception {
+        when(chatService.chat("hello")).thenThrow(new UpstreamResponseException("模型服务未返回响应"));
+
+        mockMvc.perform(post("/api/chat")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"message":"hello"}
+                                """))
+                .andExpect(status().isBadGateway())
+                .andExpect(jsonPath("$.code").value("UPSTREAM_ERROR"));
+    }
+
+    /**
+     * 测试超时场景：当 TransientAiException 的根因为 SocketTimeoutException 时，
+     * 应返回 504 Gateway Timeout 并携带 UPSTREAM_TIMEOUT 错误码
+     */
+    @Test
+    void mapsTimeoutToGatewayTimeout() throws Exception {
+        when(chatService.chat("hello")).thenThrow(
+                new TransientAiException("timeout", new SocketTimeoutException("Read timed out")));
+
+        mockMvc.perform(post("/api/chat")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"message":"hello"}
+                                """))
+                .andExpect(status().isGatewayTimeout())
+                .andExpect(jsonPath("$.code").value("UPSTREAM_TIMEOUT"));
+    }
+
+    /**
+     * 测试未预期异常：当服务层抛出非已知类型的 RuntimeException 时，
+     * 应返回 500 Internal Server Error 并携带 INTERNAL_ERROR 错误码
+     */
+    @Test
+    void mapsUnexpectedExceptionToInternalServerError() throws Exception {
+        when(chatService.chat("hello")).thenThrow(new RuntimeException("unexpected"));
+
+        mockMvc.perform(post("/api/chat")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"message":"hello"}
+                                """))
+                .andExpect(status().isInternalServerError())
+                .andExpect(jsonPath("$.code").value("INTERNAL_ERROR"));
+    }
+
+    /**
+     * 测试 null 请求体：当请求体为 null 时应返回 400 Bad Request
+     */
+    @Test
+    void rejectsNullRequestBody() throws Exception {
+        mockMvc.perform(post("/api/chat")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(""))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_REQUEST"));
     }
 }
