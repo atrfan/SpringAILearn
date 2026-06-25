@@ -1,5 +1,6 @@
 package com.foxmimi.springaichat;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -14,6 +15,7 @@ import org.springframework.boot.test.context.SpringBootTest;
  * </p>
  * <p>注意：此测试需要配置有效的 API Key 和网络连接，属于真实调用测试。</p>
  */
+@Tag("integration")
 @SpringBootTest
 public class OpenAIChatTest {
 

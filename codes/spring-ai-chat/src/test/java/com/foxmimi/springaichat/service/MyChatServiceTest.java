@@ -11,6 +11,7 @@ import org.springframework.ai.chat.model.Generation;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Answers.RETURNS_DEEP_STUBS;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -76,5 +77,17 @@ class MyChatServiceTest {
         assertThat(response.promptTokens()).isZero();
         assertThat(response.completionTokens()).isZero();
         assertThat(response.totalTokens()).isZero();
+    }
+
+    /**
+     * 测试空响应场景：当模型服务返回 null 时，应抛出 UpstreamResponseException
+     */
+    @Test
+    void throwsUpstreamResponseExceptionWhenResponseIsNull() {
+        when(chatClient.prompt().user("question").call().chatResponse()).thenReturn(null);
+
+        assertThatThrownBy(() -> chatService.chat("question"))
+                .isInstanceOf(UpstreamResponseException.class)
+                .hasMessage("模型服务未返回响应");
     }
 }
