@@ -5,6 +5,7 @@ import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.metadata.ChatResponseMetadata;
 import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.stereotype.Service;
+import reactor.core.publisher.Flux;
 
 import java.util.Optional;
 
@@ -75,6 +76,21 @@ public class MyChatService {
                 totalTokensOf(springAiResponse.getMetadata()),
                 elapsedMillis
         );
+    }
+
+//    // 初步实现流式聊天接口，返回 Flux<String>，每个元素为模型生成的增量文本片段
+//    public Flux<String> chatStream(String message) {
+//        return chatClient.prompt()
+//                .user(message)
+//                .stream()
+//                .content();
+//    }
+
+    // 因为后续要进行token 统计等信息，所以这里不能返回Flux<String> ，而是直接返回一个
+    public Flux<org.springframework.ai.chat.model.ChatResponse> chatStream(String message) {
+        return chatClient.prompt()
+                .user(message)
+                .stream().chatResponse();
     }
 
     /**

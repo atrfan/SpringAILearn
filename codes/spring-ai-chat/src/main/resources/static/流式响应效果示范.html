@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8" />
+    <title>Spring AI Stream Demo</title>
+    <style>
+        body {
+            font-family: Arial, "Microsoft YaHei", sans-serif;
+            max-width: 800px;
+            margin: 40px auto;
+            padding: 0 16px;
+        }
+
+        textarea {
+            width: 100%;
+            height: 90px;
+            font-size: 16px;
+            padding: 8px;
+            box-sizing: border-box;
+        }
+
+        button {
+            margin-top: 12px;
+            padding: 8px 16px;
+            font-size: 16px;
+            cursor: pointer;
+        }
+
+        #output {
+            margin-top: 20px;
+            padding: 16px;
+            min-height: 160px;
+            border: 1px solid #ccc;
+            white-space: pre-wrap;
+            line-height: 1.6;
+        }
+    </style>
+</head>
+<body>
+<h2>Spring AI 流式响应测试</h2>
+
+<textarea id="message">请用三句话介绍 Spring AI</textarea>
+<br />
+<button onclick="startStream()">发送</button>
+<button onclick="stopStream()">停止</button>
+
+<div id="output"></div>
+
+<script>
+    let eventSource = null;
+    let receivedAnyData = false;
+
+    function startStream() {
+        const message = document.getElementById("message").value.trim();
+        const output = document.getElementById("output");
+
+        if (!message) {
+            output.textContent = "请输入消息";
+            return;
+        }
+
+        stopStream();
+        receivedAnyData = false;
+        output.textContent = "";
+
+        const url =
+            "http://localhost:8080/api/chat/stream?message=" +
+            encodeURIComponent(message);
+
+        eventSource = new EventSource(url);
+
+        eventSource.onmessage = function (event) {
+            receivedAnyData = true;
+            output.textContent += event.data;
+        };
+
+        eventSource.onerror = function () {
+            if (!receivedAnyData) {
+                output.textContent += "\n\n[连接失败，请检查后端服务或浏览器控制台]";
+            }
+            stopStream();
+        };
+    }
+
+    function stopStream() {
+        if (eventSource) {
+            eventSource.close();
+            eventSource = null;
+        }
+    }
+</script>
+</body>
+</html>

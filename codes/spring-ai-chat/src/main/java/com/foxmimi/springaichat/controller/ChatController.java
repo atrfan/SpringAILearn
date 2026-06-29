@@ -3,11 +3,16 @@ package com.foxmimi.springaichat.controller;
 import com.foxmimi.springaichat.model.ChatRequest;
 import com.foxmimi.springaichat.model.ChatResponse;
 import com.foxmimi.springaichat.service.MyChatService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.http.MediaType;
 import org.springframework.util.StringUtils;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
+
+import java.time.Duration;
+import java.util.Optional;
 
 /**
  * 聊天接口控制器
@@ -19,6 +24,10 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 @RequestMapping("/api")
 class ChatController {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(ChatController.class);
+
+    private static final Duration STREAM_TIMEOUT = Duration.ofSeconds(60);
 
     private final MyChatService chatService;
 
@@ -50,4 +59,60 @@ class ChatController {
         // 去除消息两端空白后调用聊天服务
         return chatService.chat(request.message().trim());
     }
+
+    @GetMapping(value = "/chat/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    Flux<String> chatStream(@RequestParam String message) {
+        if (!StringUtils.hasText(message)) {
+            throw new IllegalArgumentException("message 不能为空");
+        }
+
+        // 记录请求开始时间，用于后续统计本次流式请求的耗时
+        long start = System.nanoTime();
+        // 去除首尾空白后再交给下游服务处理，避免无效空格影响模型输入
+        String trimmedMessage = message.trim();
+
+        // 保存最后一次收到的 ChatResponse，方便流结束后输出完整的模型与用量信息
+        final java.util.concurrent.atomic.AtomicReference<org.springframework.ai.chat.model.ChatResponse> lastResponse =
+                new java.util.concurrent.atomic.AtomicReference<>();
+
+        return chatService.chatStream(trimmedMessage)
+                // 设置整条流的超时时间，避免上游长时间无响应导致请求悬挂
+                .timeout(STREAM_TIMEOUT)
+                // 每次收到响应都更新一次最近的完整响应对象
+                .doOnNext(lastResponse::set)
+                // 只向前端输出真正需要的文本内容，兼容中间结果为空的情况
+                .map(response -> {
+                    var result = response.getResult();
+                    if (result == null) {
+                        return "";
+                    }
+                    return Optional.ofNullable(result.getOutput().getText()).orElse("");
+                })
+                // 流正常结束后，补充打印本次请求的完整响应与耗时信息
+                .concatWith(Mono.fromRunnable(() -> {
+                    var response = lastResponse.get();
+                    if (response != null) {
+                        var metadata = response.getMetadata();
+                        LOGGER.info("本次请求 ChatResponse: model={}, usage={}, elapsed={}ms",
+                                metadata.getModel(),
+                                metadata.getUsage(),
+                                elapsedMillisSince(start));
+                    } else {
+                        // 如果整个流过程中都没有拿到响应，则记录兜底日志，便于排查问题
+                        LOGGER.info("本次请求结束，但未获得 ChatResponse");
+                    }
+                }).thenMany(Flux.empty()))
+                // 流式请求异常时不中断整个接口，直接结束流并输出告警日志
+                .onErrorResume(exception -> {
+                    LOGGER.warn("流式聊天请求异常终止：{}", exception.toString());
+                    return Flux.empty();
+                })
+                // 如果客户端主动断开连接，记录取消事件，便于分析前端中断情况
+                .doOnCancel(() -> LOGGER.info("客户端取消流式聊天请求"));
+    }
+
+    private long elapsedMillisSince(long start) {
+        return (System.nanoTime() - start) / 1_000_000;
+    }
 }
+
