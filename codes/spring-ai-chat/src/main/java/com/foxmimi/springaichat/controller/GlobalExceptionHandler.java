@@ -4,13 +4,13 @@ import com.foxmimi.springaichat.model.ErrorResponse;
 import com.foxmimi.springaichat.service.UpstreamResponseException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.ai.retry.NonTransientAiException;
-import org.springframework.ai.retry.TransientAiException;
+import org.springframework.ai.retry.*;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
 
 import java.net.SocketTimeoutException;
 import java.time.Instant;
@@ -27,6 +27,11 @@ import java.time.Instant;
 public class GlobalExceptionHandler {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(GlobalExceptionHandler.class);
+
+    @ExceptionHandler(AsyncRequestNotUsableException.class)
+    void handleAsyncRequestNotUsable(AsyncRequestNotUsableException exception) {
+        LOGGER.debug("客户端在流式响应中断开连接");
+    }
 
     /**
      * 处理非法请求参数（如 message 为空）
