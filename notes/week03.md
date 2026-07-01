@@ -6,7 +6,7 @@
 >
 > **文档定位：** 记录提示词工程的核心概念（要素、角色、零样本/少样本、设计原则、对抗性提示），并为本周要落地的 Prompt 模板基础设施（模板存储、变量绑定、变量边界、注入防护）建立理论依据。
 >
-> **当前进度：** Day15 学习内容部分。
+> **当前进度：** Day16 已完成（Prompt 模板基础设施 + `/api/summarize` 端点，已通过 Postman 手动验证）。
 
 提示工程（Prompt Engineering）是一门较新的学科，关注提示词的开发与优化，帮助用户把大语言模型（Large Language Model, LLM）用于各类场景与研究领域。掌握提示工程相关技能，有助于更好地理解大型语言模型的能力与局限。
 
@@ -84,7 +84,7 @@
    "whatpu"是坦桑尼亚的一种小型毛茸茸的动物。一个使用 whatpu 这个词的句子的例子是：
    我们在非洲旅行时看到了这些非常可爱的 whatpus。
    "farduddle"是指快速跳上跳下。一个使用 farduddle 这个词的句子的例子是：
-
+   
    AI 回答：
    当我们赢得比赛时，我们都开始上下跳跃（farduddle）庆祝。
    ```
@@ -144,10 +144,10 @@
    ```text
    提示词：
    以下是向客户推荐电影的代理程序。不要询问兴趣。不要询问个人信息。
-
+   
    客户：请根据我的兴趣推荐电影。
    代理：
-
+   
    输出：当然，我可以根据你的兴趣推荐电影。你想看什么类型？动作片、喜剧片、爱情片还是其他？
    ```
 
@@ -156,10 +156,10 @@
    ```text
    提示词：
    以下是向客户推荐电影的代理程序。代理负责从全球热门电影中推荐电影。它应该避免询问用户偏好，避免询问个人信息。如果没有可推荐的电影，它应该回答"抱歉，今天找不到电影推荐。"。
-
+   
    顾客：请根据我的兴趣推荐一部电影。
    客服：
-
+   
    输出：抱歉，我没有关于你兴趣的任何信息。不过，这是目前全球热门的电影列表：[电影列表]。希望你能找到喜欢的电影！
    ```
 
@@ -348,9 +348,122 @@ user: |
    输入：
    Author-contribution statements and acknowledgements in research papers should state clearly and specifically whether, and to what extent, the authors used AI technologies such as ChatGPT in the preparation of their manuscript and analysis. They should also indicate which LLMs were used. This will alert editors and reviewers to scrutinize manuscripts more carefully for potential biases, inaccuracies and improper source crediting. Likewise, scientific journals should be transparent about their use of LLMs, for example when selecting submitted manuscripts.
    Mention the large language model based product mentioned in the paragraph above:
-
+   
    输出：The large language model based product mentioned in the paragraph above is ChatGPT.
    ```
+
+## 每日记录
+
+### 2026-07-03（Day16）
+
+- 实际投入：约 1.5 小时
+- 今日目标：实现 Prompt 模板基础设施，并打通第一个模板端点（摘要）
+- 完成内容：
+  - 新增 `resources/prompts/summarize.yaml`，包含 `id`/`version`/`purpose`/`model`/`variables`/`system`/`user` 字段，`user` 中用 `{content}` 占位符绑定用户输入
+  - 实现 `PromptTemplateService`：启动时通过 `@PostConstruct` 从 `classpath*:prompts/*.yaml` 加载全部模板，`render(templateId, variables)` 基于 Spring AI `PromptTemplate` 完成占位符替换；声明变量缺失/为空时抛出 `PromptTemplateException`，不渲染残缺 Prompt
+  - 新增 `POST /api/summarize`：`ChatController` 渲染 `summarize` 模板后交给 `SummarizeService` 调用模型，复用第二周的 `ChatResponse`（模型名、Token、耗时）结构
+- 产出路径：
+  - `codes/spring-ai-chat/src/main/resources/prompts/summarize.yaml`
+  - `codes/spring-ai-chat/src/main/java/com/foxmimi/springaichat/service/PromptTemplateService.java`
+  - `codes/spring-ai-chat/src/main/java/com/foxmimi/springaichat/model/PromptTemplateDefinition.java`
+  - `codes/spring-ai-chat/src/main/java/com/foxmimi/springaichat/model/RenderedPrompt.java`
+  - `codes/spring-ai-chat/src/main/java/com/foxmimi/springaichat/controller/ChatController.java`（新增 `/api/summarize`）
+- 测试或实验结果：已通过 Postman 手动调用 `POST /api/summarize`，端到端返回摘要结果，调用截图另行补充
+- 明日调整：按计划进入 Day17，实现分类模板端点（少样本 + 受限枚举输出）
+
+![image-20260701214427183](./img/image-20260701214427183.png)
+
+#### 技术讲解：YAML 如何解析成 `PromptTemplateDefinition`
+
+`PromptTemplateService.loadTemplates()` 把磁盘上的一个 YAML 文件变成一个强类型 Java 对象，中间经过四层，从"定位文件"到"最终可用的不可变对象"。理解这四层，遇到"模板加载失败"或"变量替换不生效"时能快速定位是哪一层出的问题。
+
+**第零层：定位文件——`classpath*:prompts/*.yaml` 是怎么找到文件的**
+
+```java
+private static final String TEMPLATE_LOCATION = "classpath*:prompts/*.yaml";
+Resource[] resources = new PathMatchingResourcePatternResolver().getResources(TEMPLATE_LOCATION);
+```
+
+- `PathMatchingResourcePatternResolver` 是 Spring 提供的资源查找工具，能把一个带通配符的路径表达式（`ant` 风格路径 + Spring 自定义前缀）解析成一批 `Resource` 对象。
+- 前缀 `classpath:`（不带星号）只会在**第一个**匹配的 classpath 根目录下找，如果同名目录出现在多个 jar/classes 目录里，只取第一个命中的。前缀 `classpath*:`（带星号）会扫描**所有** classpath 根目录（包括所有依赖 jar 包内部），把匹配的资源全部收集起来。这里用 `classpath*:` 是因为理论上模板文件可能来自多个模块/依赖（本项目目前只有一处，但写成 `*` 更通用，也是 Spring 官方推荐的"扫描资源"写法）。
+- `*.yaml` 是 Ant 风格通配符，`*` 匹配任意字符（不跨目录），所以只会匹配 `prompts/` 目录下一层的 `.yaml` 文件，不会递归子目录。
+- 每个 `Resource` 只是"文件句柄"，此时文件内容还没被读取；真正读取发生在 `resource.getInputStream()`，返回一个字节流，交给下一层解析。
+
+**第一层：YAML 文本 → 通用 `Map`（SnakeYaml 负责）**
+
+```java
+Yaml yaml = new Yaml(new SafeConstructor(new LoaderOptions()));
+Map<String, Object> raw = yaml.load(in);
+```
+
+- Spring Boot 自带 SnakeYaml 依赖（`spring-boot-starter` 传递引入，本项目支持 `application.yml` 用的就是它），项目里不需要单独声明版本，`mvn dependency:tree` 能看到它是 `spring-boot-starter` 的间接依赖。
+- SnakeYaml 内部解析大致分三步（了解即可，不需要记细节）：**Scanner** 把字符流切成 token（YAML 的缩进、冒号、短横线等语法单元）→ **Parser** 把 token 序列组织成事件流（对应 YAML 的节点结构：mapping、sequence、scalar）→ **Constructor** 把事件流"实例化"成 Java 对象。`yaml.load(in)` 一次性跑完这三步。
+- 关键点：这一步的产物是**通用集合类型**——`Map<String, Object>`、`List<Object>`、`String`、`Integer`、`Boolean` 等，`Yaml#load` 完全不知道、也不关心 `PromptTemplateDefinition` 这个类的存在。它只是把 YAML 的语法结构（mapping → Map，sequence → List，scalar → String/Integer/Boolean）忠实地转成 Java 里对应的通用结构，这一步可以理解为"文本 → 通用数据结构"，还没有"业务含义"。
+- 数字的判定是 YAML 规范自带的：像 `version: 1` 这种没有引号的标量，SnakeYaml 会按 YAML 1.1 的隐式类型解析规则去尝试匹配（先看是不是整数格式，再看是不是浮点数格式，最后才当字符串），匹配上整数格式就直接构造成 `Integer`；如果写成 `version: "1"`（带引号）则会被强制解析成 `String`。这也是为什么 `PromptTemplateService.toDefinition` 里要用 `instanceof Integer version` 去做类型判断——万一有人手滑写成带引号的 `"1"`，这里能立刻抛错，而不是让 `version` 变成一个字符串"1"悄悄流入后续逻辑。
+- 之所以传入 `SafeConstructor` 而不是用 `new Yaml()` 默认构造器：默认的 SnakeYaml Constructor 支持通过 `!!` 标签在 YAML 里声明**任意 Java 类**并反射实例化（例如 `!!com.evil.Payload { ... }`，构造函数或 setter 被调用时可能触发任意代码执行，这是历史上真实出现过的 YAML 反序列化 CVE 的模式，和 Java 原生序列化的反序列化漏洞是同一类风险）。如果模板文件的来源不完全可信（比如未来允许运营/非开发人员上传模板），这就是一个反序列化攻击面。`SafeConstructor` 把 Constructor 换成一个"白名单版本"，只允许构造 Map/List/String/Number/Boolean/Date 等内置基本类型，遇到 `!!` 自定义类型标签会直接抛异常拒绝解析，从根上堵住这个口子。即便目前模板文件只由开发者提交（相对可信），这也是"按最小权限原则处理外部输入"的一个具体实践。
+
+**第二层：通用 `Map` → 强类型 `PromptTemplateDefinition`（手写映射 `toDefinition`）**
+
+SnakeYaml 只给到 `Map<String, Object>`，要变成 `record PromptTemplateDefinition(id, version, purpose, model, variables, system, user)`，项目里没有用注解自动绑定（比如 Jackson 的 `@JsonProperty`/`@JsonCreator` 那一套，或者 Spring Boot 的 `@ConfigurationProperties`），而是手写了一个映射方法：
+
+```java
+String id = requireText(raw, "id", filename);
+String purpose = requireText(raw, "purpose", filename);
+String modelName = requireText(raw, "model", filename);
+String system = requireText(raw, "system", filename);
+String user = requireText(raw, "user", filename);
+
+Object versionValue = raw.get("version");
+if (!(versionValue instanceof Integer version)) {
+    throw new IllegalStateException("模板 [" + filename + "] 的 version 必须是整数");
+}
+...
+return new PromptTemplateDefinition(id, version, purpose, modelName, List.copyOf(variables), system, user);
+```
+
+原理很直接：从 `Map` 里按约定好的 key（`id`/`version`/`purpose`/...）逐个取值，用 `instanceof` 模式匹配做类型收窄（Java 16+ 引入的模式匹配语法，`versionValue instanceof Integer version` 一步完成"判断类型 + 强转 + 绑定一个新的局部变量 `version`"，等价于旧写法里先 `if (versionValue instanceof Integer)` 再手动 `(Integer) versionValue` 强转，但更简洁、也避免了强转写错类型），最后把取出来的若干个局部变量一起传给 `record` 的**规范构造器**（canonical constructor，`record` 会自动生成，按声明顺序接收所有字段），组装成一个不可变对象。
+
+`record` 在这里的价值：`PromptTemplateDefinition` 只是一个"数据搬运工"，不需要可变状态、不需要继承，`record` 自动生成了构造器、`equals`/`hashCode`/`toString`、以及每个字段的只读访问器（`id()`、`version()` 等，不是传统 Bean 风格的 `getId()`），天然不可变、语义清晰，比手写一个 POJO 加一堆样板代码更合适。
+
+**为什么不用 Jackson 的 `YAMLMapper`（`objectMapper.readValue(in, PromptTemplateDefinition.class)`）这种"自动映射"方式？** 手写映射虽然多写几十行代码，但换来几个好处：
+
+1. **校验时机和报错内容可控。** 自动映射框架通常是"类型对不上就抛一个底层的、面向框架自身的异常"（比如 Jackson 的 `MismatchedInputException`），信息里往往是类名和字段路径，不一定对着"哪个模板文件（`filename`）配置错了"这件事说清楚。手写映射里每个字段都能给出定制化的清晰报错（`requireText` 统一格式化成"模板 [文件名] 缺少必填字段: xxx"），这和 Day15 定的原则一致——"配置错误要尽早暴露、报错要说人话"。
+2. **少一个依赖、少一层"隐式规则"。** 项目已经用 SnakeYaml 解析出 `Map` 了，不需要再引入 `jackson-dataformat-yaml` 这类额外依赖去做"Map → 对象"这一步；同时避免了 Jackson 注解（命名策略、`@JsonProperty` 映射规则等）这类需要额外学习成本的"隐式规则"，几十行显式代码反而更容易一眼看懂发生了什么。
+3. **`record` 恰好没有无参构造器/setter**，而多数"自动映射"框架的默认工作方式依赖无参构造器 + setter（或者需要额外配置 `@JsonCreator` 才能支持 `record` 的规范构造器），手写映射天然绕开了这个适配成本。
+
+**第三层：`variables` 列表的元素级校验**
+
+```java
+if (!(variablesValue instanceof List<?> rawVariables) || rawVariables.isEmpty()) {
+    throw new IllegalStateException(...);
+}
+List<String> variables = new ArrayList<>();
+for (Object item : rawVariables) {
+    if (!(item instanceof String name) || name.isBlank()) {
+        throw new IllegalStateException(...);
+    }
+    variables.add(name);
+}
+```
+
+`variables` 在 YAML 里写的是一个字符串列表（`- content`），但 SnakeYaml 解析出来的静态类型是 `List<Object>`——因为 YAML 语法本身不限制列表元素类型，理论上一个列表里可以混入数字、布尔值、甚至嵌套的 map（比如手滑写成 `variables: [content, 123]`）。泛型擦除也意味着运行时无法从 `List<?>` 本身知道元素类型，只能在取出每个元素时逐个用 `instanceof String` 判断。这一步本质上是把"YAML 语法层面允许的宽松结构"收紧成"业务上要求的严格结构（非空字符串列表）"，收紧失败就在启动阶段抛出，而不是留到运行期渲染时才因为类型不对崩掉。
+
+最后用 `List.copyOf(variables)` 包一层，返回一个不可变列表存进 `record`，避免调用方拿到 `variables()` 之后意外修改，破坏"模板加载后只读"的假设。
+
+**第四层：运行期渲染——`{content}` 占位符是怎么被替换的**
+
+上面三层解决的是"启动时把 YAML 变成 `PromptTemplateDefinition`"，是一次性的、每个模板只做一次。真正每次请求都会执行的是 `render()` 里的这一行：
+
+```java
+String renderedUser = new PromptTemplate(definition.user()).render(model);
+```
+
+- `PromptTemplate` 是 Spring AI 提供的一个轻量模板类，构造时传入含占位符的模板字符串（`definition.user()`，即 YAML 里 `user` 字段那段文本，例如 `"====\n{content}\n====\n摘要："`）。
+- `render(Map<String, Object> model)` 内部本质上是字符串替换：扫描模板文本里 `{xxx}` 这种花括号占位符，逐个用 `model` 这个 `Map` 里同名 key 对应的值替换掉，其余文本原样保留。它不做条件判断、循环这类复杂模板逻辑（不是 Thymeleaf/FreeMarker 那种"模板引擎"），只做"变量替换"这一件事，符合 Prompt 模板这个场景足够用、也足够简单可控。
+- 这一层和第二、三层是解耦的：`PromptTemplateService` 只负责把"哪些变量必须提供"这件事在渲染前校验完（缺失就在 `render()` 里提前抛 `PromptTemplateException`，不会走到 `PromptTemplate.render` 这一步），真正的字符串替换完全交给 Spring AI 的 `PromptTemplate`，本类不重复造轮子。
+- 这也是"变量边界"在代码层面的落地点：`model` 这个 `Map` 里只装了 `definition.variables()` 里声明过的、经过校验的变量（见 `render()` 中的过滤逻辑），用户输入只能通过这个 `Map` 流入 `{content}` 占位符，不会有任何路径让用户输入直接拼进 `definition.system()`（System 约束原样返回、不参与这次替换）。
+
+**小结**：整个链路是 `YAML 文件（磁盘/classpath） --PathMatchingResourcePatternResolver--> Resource（文件句柄） --SnakeYaml--> Map<String,Object>（通用结构） --手写映射+校验--> PromptTemplateDefinition（不可变强类型对象，启动时缓存在内存） --每次请求 render()--> PromptTemplate 做占位符替换 --> RenderedPrompt`。前三层只在应用启动的 `@PostConstruct` 阶段跑一次，负责"把宽松的 YAML 语法收紧成程序能安全使用的强类型对象，并在收紧失败时尽早报错"；最后一层在每次请求时跑，负责"把已校验过的变量安全地填进固定骨架"。这种"启动时校验、运行时只做替换"的分工，是本周变量边界设计能成立的关键前提。
 
 ## 参考资料
 

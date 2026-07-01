@@ -1,7 +1,6 @@
-package com.foxmimi.springaichat.controller;
+package com.foxmimi.springaichat.exception;
 
 import com.foxmimi.springaichat.model.ErrorResponse;
-import com.foxmimi.springaichat.service.UpstreamResponseException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.retry.*;

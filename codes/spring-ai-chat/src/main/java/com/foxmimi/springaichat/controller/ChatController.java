@@ -2,14 +2,17 @@ package com.foxmimi.springaichat.controller;
 
 import com.foxmimi.springaichat.model.ChatRequest;
 import com.foxmimi.springaichat.model.ChatResponse;
+import com.foxmimi.springaichat.model.RenderedPrompt;
+import com.foxmimi.springaichat.model.SummarizeRequest;
 import com.foxmimi.springaichat.service.MyChatService;
+import com.foxmimi.springaichat.service.PromptTemplateService;
+import com.foxmimi.springaichat.service.SummarizeService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
 import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Flux;
-import reactor.core.publisher.Mono;
 
 import java.time.Duration;
 import java.util.Optional;
@@ -31,13 +34,20 @@ class ChatController {
 
     private final MyChatService chatService;
 
+    private final SummarizeService summarizeService;
+
+    private final PromptTemplateService promptTemplateService;
+
     /**
-     * 通过构造器注入聊天服务
+     * 通过构造器注入聊天服务和总结服务
      *
      * @param chatService 聊天服务实例
+     * @param summarizeService 总结服务实例
      */
-    ChatController(MyChatService chatService) {
+    ChatController(MyChatService chatService, SummarizeService summarizeService, PromptTemplateService promptTemplateService) {
         this.chatService = chatService;
+        this.summarizeService = summarizeService;
+        this.promptTemplateService = promptTemplateService;
     }
 
     /**
@@ -83,13 +93,19 @@ class ChatController {
                 // 只向前端输出真正需要的文本内容，兼容中间结果为空的情况
                 .map(response -> {
                     var result = response.getResult();
-                    if (result == null) {
+                    // result 或其 output 为空时都不应解引用，避免 NPE 被 onErrorResume 静默吞掉
+                    if (result == null || result.getOutput() == null) {
                         return "";
                     }
                     return Optional.ofNullable(result.getOutput().getText()).orElse("");
                 })
+                // 过滤空片段：流的最后一个 chunk 通常只带 usage 元数据、正文为空，
+                // 若原样下发会给前端推送无意义的空 SSE 事件（lastResponse 已在上游 doOnNext 捕获，不受影响）
+                .filter(text -> !text.isEmpty())
                 // 流正常结束后，补充打印本次请求的完整响应与耗时信息
-                .concatWith(Mono.fromRunnable(() -> {
+                // 注意：仅在正常完成（onComplete）时打印。错误由下游 onErrorResume 记录、
+                // 客户端取消由 doOnCancel 记录，避免把失败/取消误记为一次成功的响应
+                .doOnComplete(() -> {
                     var response = lastResponse.get();
                     if (response != null) {
                         var metadata = response.getMetadata();
@@ -101,7 +117,7 @@ class ChatController {
                         // 如果整个流过程中都没有拿到响应，则记录兜底日志，便于排查问题
                         LOGGER.info("本次请求结束，但未获得 ChatResponse");
                     }
-                }).thenMany(Flux.empty()))
+                })
                 // 流式请求异常时不中断整个接口，直接结束流并输出告警日志
                 .onErrorResume(exception -> {
                     LOGGER.warn("流式聊天请求异常终止：{}", exception.toString());
@@ -109,6 +125,17 @@ class ChatController {
                 })
                 // 如果客户端主动断开连接，记录取消事件，便于分析前端中断情况
                 .doOnCancel(() -> LOGGER.info("客户端取消流式聊天请求"));
+    }
+
+    @PostMapping("/summarize")
+    ChatResponse summerizeChat(@RequestBody SummarizeRequest request) {
+        // 校验请求体和消息内容不能为空
+        if (request == null || !StringUtils.hasText(request.message())) {
+            throw new IllegalArgumentException("message 不能为空");
+        }
+
+        RenderedPrompt render = promptTemplateService.render("summarize", java.util.Map.of("content", request.message().trim()));
+        return summarizeService.chat(render);
     }
 
     private long elapsedMillisSince(long start) {

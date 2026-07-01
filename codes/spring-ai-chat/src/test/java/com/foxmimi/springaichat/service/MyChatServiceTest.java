@@ -1,5 +1,6 @@
 package com.foxmimi.springaichat.service;
 
+import com.foxmimi.springaichat.exception.UpstreamResponseException;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.AssistantMessage;

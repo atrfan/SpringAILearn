@@ -2,6 +2,7 @@ package com.foxmimi.springaichat.service;
 
 import com.foxmimi.springaichat.exception.UpstreamResponseException;
 import com.foxmimi.springaichat.model.ChatResponse;
+import com.foxmimi.springaichat.model.RenderedPrompt;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.metadata.ChatResponseMetadata;
 import org.springframework.ai.chat.metadata.Usage;
@@ -19,7 +20,7 @@ import java.util.Optional;
  * </p>
  */
 @Service
-public class MyChatService {
+public class SummarizeService {
 
     /** 当模型元数据中未提供模型名称时使用的默认值 */
     private static final String UNKNOWN_MODEL = "unknown";
@@ -31,7 +32,7 @@ public class MyChatService {
      *
      * @param chatClient 在 {@link com.foxmimi.springaichat.config.OpenAIConfig} 中配置的 ChatClient Bean
      */
-    public MyChatService(ChatClient chatClient) {
+    public SummarizeService(ChatClient chatClient) {
         this.chatClient = chatClient;
     }
 
@@ -42,17 +43,18 @@ public class MyChatService {
      * 同时统计调用耗时，并提取 Token 用量等元数据。
      * </p>
      *
-     * @param message 用户输入的消息
+     * @param prompt
      * @return 包含模型回复内容、Token 用量和耗时的统一响应对象
      * @throws UpstreamResponseException 当模型服务未返回任何响应时抛出
      */
-    public ChatResponse chat(String message) {
+    public ChatResponse chat(RenderedPrompt prompt) {
         // 记录请求开始时间（纳秒级精度）
         long start = System.nanoTime();
 
         // 构建提示词并同步调用 AI 模型
         var springAiResponse = chatClient.prompt()
-                .user(message)
+                .user(prompt.user())
+                .system(prompt.system())
                 .call()
                 .chatResponse();
 
@@ -77,21 +79,6 @@ public class MyChatService {
                 totalTokensOf(springAiResponse.getMetadata()),
                 elapsedMillis
         );
-    }
-
-//    // 初步实现流式聊天接口，返回 Flux<String>，每个元素为模型生成的增量文本片段
-//    public Flux<String> chatStream(String message) {
-//        return chatClient.prompt()
-//                .user(message)
-//                .stream()
-//                .content();
-//    }
-
-    // 因为后续要进行token 统计等信息，所以这里不能返回Flux<String> ，而是直接返回一个
-    public Flux<org.springframework.ai.chat.model.ChatResponse> chatStream(String message) {
-        return chatClient.prompt()
-                .user(message)
-                .stream().chatResponse();
     }
 
     /**
