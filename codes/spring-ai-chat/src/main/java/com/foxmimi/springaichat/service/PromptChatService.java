@@ -7,20 +7,20 @@ import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.metadata.ChatResponseMetadata;
 import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.stereotype.Service;
-import reactor.core.publisher.Flux;
 
 import java.util.Optional;
 
 /**
- * 聊天服务
+ * Prompt 调用服务
  * <p>
- * 封装与 AI 模型的交互逻辑，调用 Spring AI 的 {@link ChatClient} 发送用户消息，
- * 并将模型响应转换为统一的 {@link ChatResponse} 格式返回。
- * 同时记录请求耗时和 Token 使用量等元信息。
+ * 承接 {@link com.foxmimi.springaichat.service.PromptTemplateService} 渲染出的
+ * {@link RenderedPrompt}，调用 Spring AI 的 {@link ChatClient} 完成一次同步模型调用，
+ * 并转换为统一的 {@link ChatResponse} 格式返回。摘要、分类等基于模板的端点共用这一层，
+ * 各自的业务差异（例如分类结果的枚举归一化）留给上层各自的 Service 处理。
  * </p>
  */
 @Service
-public class SummarizeService {
+public class PromptChatService {
 
     /** 当模型元数据中未提供模型名称时使用的默认值 */
     private static final String UNKNOWN_MODEL = "unknown";
@@ -32,18 +32,18 @@ public class SummarizeService {
      *
      * @param chatClient 在 {@link com.foxmimi.springaichat.config.OpenAIConfig} 中配置的 ChatClient Bean
      */
-    public SummarizeService(ChatClient chatClient) {
+    public PromptChatService(ChatClient chatClient) {
         this.chatClient = chatClient;
     }
 
     /**
-     * 发送用户消息并获取 AI 模型的响应
+     * 用渲染好的 Prompt 调用模型
      * <p>
      * 采用阻塞式调用（同步），等待模型生成完整回复后一次性返回。
      * 同时统计调用耗时，并提取 Token 用量等元数据。
      * </p>
      *
-     * @param prompt
+     * @param prompt 已渲染完成的 Prompt（System 约束 + 变量替换后的 User 文本）
      * @return 包含模型回复内容、Token 用量和耗时的统一响应对象
      * @throws UpstreamResponseException 当模型服务未返回任何响应时抛出
      */

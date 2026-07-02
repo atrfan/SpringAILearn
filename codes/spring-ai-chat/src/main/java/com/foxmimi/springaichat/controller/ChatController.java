@@ -2,11 +2,13 @@ package com.foxmimi.springaichat.controller;
 
 import com.foxmimi.springaichat.model.ChatRequest;
 import com.foxmimi.springaichat.model.ChatResponse;
+import com.foxmimi.springaichat.model.ClassifyRequest;
 import com.foxmimi.springaichat.model.RenderedPrompt;
 import com.foxmimi.springaichat.model.SummarizeRequest;
+import com.foxmimi.springaichat.service.ClassifyService;
 import com.foxmimi.springaichat.service.MyChatService;
+import com.foxmimi.springaichat.service.PromptChatService;
 import com.foxmimi.springaichat.service.PromptTemplateService;
-import com.foxmimi.springaichat.service.SummarizeService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
@@ -15,6 +17,8 @@ import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Flux;
 
 import java.time.Duration;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -34,19 +38,27 @@ class ChatController {
 
     private final MyChatService chatService;
 
-    private final SummarizeService summarizeService;
+    private final PromptChatService promptChatService;
+
+    private final ClassifyService classifyService;
 
     private final PromptTemplateService promptTemplateService;
 
     /**
-     * 通过构造器注入聊天服务和总结服务
+     * 通过构造器注入聊天服务、Prompt 调用服务、分类服务与模板服务
      *
-     * @param chatService 聊天服务实例
-     * @param summarizeService 总结服务实例
+     * @param chatService            聊天服务实例
+     * @param promptChatService      Prompt 调用服务实例，摘要与分类共用
+     * @param classifyService        分类服务实例，负责分类结果归一化
+     * @param promptTemplateService  Prompt 模板服务实例
      */
-    ChatController(MyChatService chatService, SummarizeService summarizeService, PromptTemplateService promptTemplateService) {
+    ChatController(MyChatService chatService,
+                    PromptChatService promptChatService,
+                    ClassifyService classifyService,
+                    PromptTemplateService promptTemplateService) {
         this.chatService = chatService;
-        this.summarizeService = summarizeService;
+        this.promptChatService = promptChatService;
+        this.classifyService = classifyService;
         this.promptTemplateService = promptTemplateService;
     }
 
@@ -134,8 +146,43 @@ class ChatController {
             throw new IllegalArgumentException("message 不能为空");
         }
 
-        RenderedPrompt render = promptTemplateService.render("summarize", java.util.Map.of("content", request.message().trim()));
-        return summarizeService.chat(render);
+        RenderedPrompt render = promptTemplateService.render("summarize", Map.of("content", request.message().trim()));
+        return promptChatService.chat(render);
+    }
+
+    /**
+     * 处理分类请求
+     * <p>
+     * 接收 POST 请求 {@code /api/classify}，候选类别由请求方传入。
+     * 渲染分类模板后交给模型判断，再由 {@link ClassifyService} 把结果归一化到候选类别内。
+     * </p>
+     *
+     * @param request 分类请求体，包含待分类文本与候选类别列表
+     * @return 分类响应，content 字段为归一化后的类别（或"未知"）
+     * @throws IllegalArgumentException 当消息为空，或候选类别列表为空时抛出
+     */
+    @PostMapping("/classify")
+    ChatResponse classify(@RequestBody ClassifyRequest request) {
+        // 校验请求体和消息内容不能为空
+        if (request == null || !StringUtils.hasText(request.message())) {
+            throw new IllegalArgumentException("message 不能为空");
+        }
+
+        // 去除空白候选类别，保留调用方传入的原始文案用于归一化匹配
+        List<String> categories = request.categories() == null
+                ? List.of()
+                : request.categories().stream()
+                        .filter(StringUtils::hasText)
+                        .map(String::trim)
+                        .toList();
+        if (categories.isEmpty()) {
+            throw new IllegalArgumentException("categories 不能为空");
+        }
+
+        RenderedPrompt render = promptTemplateService.render("classify", Map.of(
+                "content", request.message().trim(),
+                "categories", String.join(",", categories)));
+        return classifyService.classify(render, categories);
     }
 
     private long elapsedMillisSince(long start) {

@@ -4,8 +4,9 @@ import com.foxmimi.springaichat.exception.GlobalExceptionHandler;
 import com.foxmimi.springaichat.model.ChatResponse;
 import com.foxmimi.springaichat.service.MyChatService;
 import com.foxmimi.springaichat.exception.UpstreamResponseException;
+import com.foxmimi.springaichat.service.ClassifyService;
+import com.foxmimi.springaichat.service.PromptChatService;
 import com.foxmimi.springaichat.service.PromptTemplateService;
-import com.foxmimi.springaichat.service.SummarizeService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.retry.NonTransientAiException;
@@ -33,7 +34,8 @@ class ChatControllerTest {
 
     private MyChatService chatService;
     private PromptTemplateService promptTemplateService;
-    private SummarizeService summarizeService;
+    private PromptChatService promptChatService;
+    private ClassifyService classifyService;
     private MockMvc mockMvc;
 
     /**
@@ -46,7 +48,7 @@ class ChatControllerTest {
         // 通过 when(...).thenReturn(...) 或 thenThrow(...) 精确控制它的行为，从而单独测试 Controller 层的逻辑（参数校验、异常映射等）。
         chatService = mock(MyChatService.class);
         mockMvc = MockMvcBuilders
-                .standaloneSetup(new ChatController(chatService, summarizeService, promptTemplateService))
+                .standaloneSetup(new ChatController(chatService, promptChatService, classifyService, promptTemplateService))
                 // 注册全局异常处理器，确保异常能被正确捕获和转换
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .build();
