@@ -3,7 +3,7 @@ package com.foxmimi.springaichat.model;
 /**
  * 统一错误响应体
  * <p>
- * 由 {@link com.foxmimi.springaichat.controller.GlobalExceptionHandler} 在捕获异常时构建，
+ * 由 {@link com.foxmimi.springaichat.exception.GlobalExceptionHandler} 在捕获异常时构建，
  * 向客户端返回结构化的错误信息。
  * </p>
  *
