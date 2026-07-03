@@ -1,6 +1,7 @@
 package com.foxmimi.springaichat.service;
 
 import com.foxmimi.springaichat.exception.PromptTemplateException;
+import com.foxmimi.springaichat.model.PromptSummary;
 import com.foxmimi.springaichat.model.PromptTemplateDefinition;
 import com.foxmimi.springaichat.model.RenderedPrompt;
 import jakarta.annotation.PostConstruct;
@@ -17,8 +18,7 @@ import org.yaml.snakeyaml.constructor.SafeConstructor;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
-import java.util.Collection;
-import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -134,10 +134,20 @@ public class PromptTemplateService {
     }
 
     /**
-     * 返回全部已加载模板定义（只读），供后续 {@code GET /api/prompts} 列表端点使用（Day18）。
+     * 返回全部已加载模板的只读元数据视图，按 id 升序排列，供 {@code GET /api/prompts} 列表端点使用。
+     * <p>
+     * 只投影治理元数据（版本、用途、适用模型）与变量契约，刻意不含
+     * {@link PromptTemplateDefinition#system}/{@link PromptTemplateDefinition#user} 正文——
+     * 把"不对外暴露模板骨架"这一决定收敛在服务层，调用方（Controller）拿不到完整定义，
+     * 也就无从泄露少样本等内部内容。
+     * </p>
      */
-    public Collection<PromptTemplateDefinition> definitions() {
-        return Collections.unmodifiableCollection(templates.values());
+    public List<PromptSummary> summaries() {
+        return templates.values().stream()
+                .sorted(Comparator.comparing(PromptTemplateDefinition::id))
+                .map(def -> new PromptSummary(
+                        def.id(), def.version(), def.purpose(), def.model(), def.variables()))
+                .toList();
     }
 
     /**

@@ -3,6 +3,8 @@ package com.foxmimi.springaichat.controller;
 import com.foxmimi.springaichat.model.ChatRequest;
 import com.foxmimi.springaichat.model.ChatResponse;
 import com.foxmimi.springaichat.model.ClassifyRequest;
+import com.foxmimi.springaichat.model.ExtractRequest;
+import com.foxmimi.springaichat.model.PromptSummary;
 import com.foxmimi.springaichat.model.RenderedPrompt;
 import com.foxmimi.springaichat.model.SummarizeRequest;
 import com.foxmimi.springaichat.service.ClassifyService;
@@ -183,6 +185,44 @@ class ChatController {
                 "content", request.message().trim(),
                 "categories", String.join(",", categories)));
         return classifyService.classify(render, categories);
+    }
+
+    /**
+     * 处理信息抽取请求
+     * <p>
+     * 接收 POST 请求 {@code /api/extract}，渲染抽取模板后交给模型，从文本中抽取
+     * 姓名、日期、金额三个固定字段，以简单 JSON 文本返回（字段缺失时约定为"未提及"）。
+     * 本周结果先以文本形式返回，严格的结构化解析与校验留到第四周。
+     * </p>
+     *
+     * @param request 抽取请求体，包含待抽取的文本
+     * @return 抽取响应，content 字段为模型返回的 JSON 文本
+     * @throws IllegalArgumentException 当消息为空或仅包含空白字符时抛出
+     */
+    @PostMapping("/extract")
+    ChatResponse extract(@RequestBody ExtractRequest request) {
+        // 校验请求体和消息内容不能为空
+        if (request == null || !StringUtils.hasText(request.message())) {
+            throw new IllegalArgumentException("message 不能为空");
+        }
+
+        RenderedPrompt render = promptTemplateService.render("extract", Map.of("content", request.message().trim()));
+        return promptChatService.chat(render);
+    }
+
+    /**
+     * 列出已加载的全部 Prompt 模板元数据
+     * <p>
+     * 只读端点 {@code GET /api/prompts}，返回每个模板的 id、版本、用途、适用模型与变量列表
+     * （按 id 升序），便于回归对照与确认"当前运行的是哪个模板、哪一版"。
+     * 不返回 System/User 正文，避免泄露模板骨架与少样本。
+     * </p>
+     *
+     * @return 模板元数据视图列表
+     */
+    @GetMapping("/prompts")
+    List<PromptSummary> listPrompts() {
+        return promptTemplateService.summaries();
     }
 
     private long elapsedMillisSince(long start) {

@@ -6,7 +6,7 @@
 >
 > **文档定位：** 记录提示词工程的核心概念（要素、角色、零样本/少样本、设计原则、对抗性提示），并为本周要落地的 Prompt 模板基础设施（模板存储、变量绑定、变量边界、注入防护）建立理论依据。
 >
-> **当前进度：** Day16 已完成（Prompt 模板基础设施 + `/api/summarize` 端点，已通过 Postman 手动验证）。
+> **当前进度：** Day18 已完成（信息抽取 `/api/extract` 端点、只读模板列表 `GET /api/prompts` 均通过手动验证；模板元数据经评估决定不新增"最后修改原因"字段，改由 `version` + Git 记录承载）。
 
 提示工程（Prompt Engineering）是一门较新的学科，关注提示词的开发与优化，帮助用户把大语言模型（Large Language Model, LLM）用于各类场景与研究领域。掌握提示工程相关技能，有助于更好地理解大型语言模型的能力与局限。
 
@@ -522,6 +522,67 @@ Day16 的模板示例草稿（本节上方旧版本）里 `categories` 曾设想
 
 - 遇到的问题：暂未遇到异常问题。用例 1/2 的 `completionTokens` 都只有 1，说明本次两次调用模型都严格遵守了 `system` 里"不要附加解释、标点或多余文字"的约束，没有出现"归一化兜底逻辑真正被触发"的情况（即模型输出候选集合外文字、需要靠 `ClassifyService.normalize` 强制收敛到"未知"的场景），少样本示例对输出稳定性起了作用；不过样本量还小（只测了 2 条会真正调模型的用例），"模型是否严格遵守指令"这个结论还比较初步。
 - 明日调整：按计划进入 Day18，实现信息抽取模板端点，并补全模板版本与元数据（新增只读端点 `GET /api/prompts`）
+
+### 2026-07-05（Day18）
+
+- 实际投入：约 2 小时（信息抽取端点 + 模板元数据治理 + 只读列表端点，投入时间可按实际调整）
+- 今日目标：实现信息抽取模板端点，并完成模板元数据治理与只读列表端点（`GET /api/prompts`）
+- 完成内容：
+  - 新增 `resources/prompts/extract.yaml`：`system` 固定三个抽取字段（`name`/`date`/`amount`）及其含义，约定字段缺失时输出"未提及"，要求只输出 JSON、不带解释或 markdown 代码块标记；内置 2 组少样本（全字段齐全 / 全字段缺失各一），`user` 用 `{content}` 占位符
+  - 新增 `POST /api/extract`：请求体 `ExtractRequest(message)`，渲染 `extract` 模板后复用 `PromptChatService.chat()` 调用模型。抽取无需分类那样的枚举归一化，直接复用通用调用层，结果本周先以 JSON 文本原样返回
+  - 输出键采用英文 `name`/`date`/`amount`，为第四周"结构化输出（Java Record + Bean Validation）"预留自然的升级路径
+  - 模板元数据治理：评估后**决定不新增"最后修改原因"字段**（一度实现又移除，见下方"设计决定"），`version`/`purpose`/`model` 已足够，其余修改信息交给 Git
+  - 新增只读端点 `GET /api/prompts`：新增 `PromptSummary` 视图，`PromptTemplateService.summaries()` 把已加载模板投影为 `id`/`version`/`purpose`/`model`/`variables`（按 id 升序），**不含 `system`/`user` 正文**，把"不暴露模板骨架"的决定收敛在服务层
+- 产出路径：
+  - `codes/spring-ai-chat/src/main/resources/prompts/extract.yaml`
+  - `codes/spring-ai-chat/src/main/java/com/foxmimi/springaichat/model/ExtractRequest.java`
+  - `codes/spring-ai-chat/src/main/java/com/foxmimi/springaichat/model/PromptSummary.java`（只读元数据视图）
+  - `codes/spring-ai-chat/src/main/java/com/foxmimi/springaichat/service/PromptTemplateService.java`（`definitions()` 改为投影元数据的 `summaries()`）
+  - `codes/spring-ai-chat/src/main/java/com/foxmimi/springaichat/controller/ChatController.java`（新增 `POST /api/extract` 与 `GET /api/prompts`）
+
+**设计决定：字段缺失时输出约定字符串"未提及"**
+
+抽取是多字段任务，某个字段在原文中根本没出现时，必须约定一个稳定的表达，否则模型会臆测或编造一个值。`system` 里明确"未提及时输出字符串'未提及'，不要臆测或编造"，这和分类端点把枚举外输出兜底到"未知"是同一思路，都呼应 Day15 笔记"对模型输出保持不信任、缺失不糊弄"的结论。
+
+**变量边界说明**：`user` 模板只含 `{content}` 一个占位符；少样本示例里 JSON 的花括号 `{}` 全部写在 `system` 中，而 `system` 不参与 `PromptTemplate.render()`（`PromptTemplateService.render` 只对 `definition.user()` 做渲染），因此示例 JSON 的 `{}` 不会被误当作占位符，用户输入也只会流入 `{content}` 数据槽，不进入 `system` 约束。
+
+**设计决定：不新增"最后修改原因"元数据字段**
+
+计划（Day18）原本点名给每个模板补"最后修改原因"。实现时先加了一个必填的 `last-modified-reason` 字段，随后评估决定移除，理由：
+
+1. **信息与 Git 重复**：模板文件就在 Git 里、由开发者提交，"谁、何时、为何改"由 commit message 与 `git log`/`git blame` 完整记录，字段只是手抄一份。
+2. **手填字段必然失真**：它没有任何机制跟随改动更新，改了模板正文却忘了改这行，它就开始"说谎"，而一个会过期的权威字段比没有更糟。
+3. **判断标准不是"模型用不用它"**：`version` 同样不给模型用却有价值（离散、不失真的回归锚点）；真正的标准是"信息是否已被别处记录 + 是否会失真"，`last-modified-reason` 两条都不满足。
+4. **它真正有价值的场景**是模板脱离 Git、由运营在 Prompt 管理平台（PromptLayer/Langfuse 等）后台编辑，此时才需要 `updated_by`/`updated_at`/`change_reason` 这类**系统自动写入**的审计字段——本项目当前不是这个形态。
+
+结论：治理元数据保留 `version`/`purpose`/`model`，其余交给版本控制系统，不冗余落进模板文件。
+
+**只读列表端点 `GET /api/prompts`**：返回全部模板的元数据视图（`PromptSummary`），供回归对照与确认"线上跑的是哪个模板、哪一版"。安全上刻意不返回 `system`/`user` 正文——`ChatController` 只能拿到 `PromptTemplateService.summaries()` 投影后的视图，从源头上接触不到模板骨架与少样本，而非依赖 Controller"记得别返回正文"。
+
+- 测试或实验结果：用 Postman 实际跑了 3 组用例，均符合预期：
+
+  | 用例 | 请求 `message` | 返回 `content` | 关键指标 | 结论 |
+  |---|---|---|---|---|
+  | 1. 三字段齐全 | 李雷在2026年3月8日与供应商签下了一份价值8万元的采购合同。 | `{"name":"李雷","date":"2026年3月8日","amount":"8万元"}` | completionTokens=21，elapsed=1183ms | 三字段全命中，`content` 为纯 JSON，无解释或代码块标记 |
+  | 2. 部分字段缺失 | 韩梅梅于2025年12月20日正式入职了这家公司。 | `{"name":"韩梅梅","date":"2025年12月20日","amount":"未提及"}` | completionTokens=22，elapsed=782ms | 原文无金额，`amount` 正确输出约定的"未提及"，未编造数字 |
+  | 3. 全部字段缺失 | 这本书的排版很精美，读起来很舒服。 | `{"name":"未提及","date":"未提及","amount":"未提及"}` | completionTokens=16，elapsed=812ms | 三字段全部"未提及"，未把"这本书"臆测成人名 |
+
+  三条返回的 `model` 均为 `deepseek-v4-flash`（`application.yaml` 配置的 `deepseek-chat` 是稳定别名，实际路由到 flash，与 Day17 一致）。三条 `content` 都是纯 JSON，未出现 ```` ```json ```` 代码块或解释文字，`completionTokens` 落在 16–22 之间，说明模型严格遵守了"只输出 JSON"约束，少样本对输出格式的稳定性起了作用。
+
+  `GET /api/prompts` 也做了验证（此端点只读内存元数据、不调用模型、无费用），返回按 id 升序的三条：
+
+  ```json
+  [
+    {"id":"classify","version":1,"purpose":"将输入文本分类到调用方传入的候选类别集合中","model":"deepseek-chat","variables":["categories","content"]},
+    {"id":"extract","version":1,"purpose":"从输入文本中抽取固定字段（姓名、日期、金额）并以 JSON 返回","model":"deepseek-chat","variables":["content"]},
+    {"id":"summarize","version":1,"purpose":"将输入文本压缩为简洁摘要","model":"deepseek-chat","variables":["content"]}
+  ]
+  ```
+
+  三点符合预期：① 三个模板都列出；② 每条含 `version`/`purpose`/`model`/`variables`；③ **无 `system`/`user` 字段**，正文未外泄。这一步顺带确认了移除 `last-modified-reason` 后三份 YAML 仍能正常加载。
+
+- 遇到的问题：暂无异常。需要留意的一点：本周抽取结果只做了 JSON 文本原样透传，服务端没有做 JSON 解析与字段校验（模型万一输出非法 JSON、缺字段或多字段，目前不会被拦截）——这是刻意为之，严格结构化解析与 Bean Validation 属于第四周范围，先列入技术债务。
+- 明日调整：进入 Day19（变量边界与基础注入防护）——统一处理空值/超长/非法类型输入，用"忽略以上指令"类恶意输入手动验证 System 约束，并把模板异常接入 `GlobalExceptionHandler` 的错误码映射。
 
 ## 参考资料
 
