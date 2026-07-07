@@ -29,6 +29,11 @@
     <properties>
         <java.version>21</java.version>
         <spring-ai.version>2.0.0</spring-ai.version>
+        <!-- 默认排除 integration 标签的测试（需要真实 API 与网络）。
+             属性驱动而非硬编码在 surefire 配置里：硬编码值无法被命令行 -D 覆盖，
+             会导致集成测试永远无法通过 mvn 运行。单独运行集成测试：
+             mvn test -D"surefire.excluded.groups=" -Dtest=<测试类名> -->
+        <surefire.excluded.groups>integration</surefire.excluded.groups>
     </properties>
     <!--    <dependencies>-->
     <!--        <dependency>-->
@@ -115,7 +120,7 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <configuration>
-                    <excludedGroups>integration</excludedGroups>
+                    <excludedGroups>${surefire.excluded.groups}</excludedGroups>
                 </configuration>
             </plugin>
             <plugin>
