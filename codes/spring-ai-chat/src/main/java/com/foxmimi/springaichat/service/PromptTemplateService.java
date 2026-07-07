@@ -1,5 +1,6 @@
 package com.foxmimi.springaichat.service;
 
+import com.foxmimi.springaichat.exception.PromptInputTooLongException;
 import com.foxmimi.springaichat.exception.PromptTemplateException;
 import com.foxmimi.springaichat.model.PromptSummary;
 import com.foxmimi.springaichat.model.PromptTemplateDefinition;
@@ -22,6 +23,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 /**
  * Prompt 模板服务
@@ -35,7 +37,10 @@ import java.util.Map;
  * <ul>
  *     <li>模板从外部 YAML 文件加载，Prompt 不以裸字符串散落进代码；</li>
  *     <li>用户输入只通过变量绑定流入 User 占位符，不进入 System 约束；</li>
- *     <li>声明的变量缺失时抛出 {@link PromptTemplateException}，绝不渲染残缺 Prompt。</li>
+ *     <li>声明的变量缺失时抛出 {@link PromptTemplateException}，绝不渲染残缺 Prompt；</li>
+ *     <li>输入边界统一在渲染前收口（Day19）：非字符串类型报错、超长拒绝
+ *         （{@link PromptInputTooLongException}）、整行 "====" 分隔符中和，
+ *         调用方无需各自重复这套防线。</li>
  * </ul>
  * </p>
  */
@@ -46,6 +51,22 @@ public class PromptTemplateService {
 
     /** 模板文件位置：类路径下 prompts 目录中的全部 yaml 文件 */
     private static final String TEMPLATE_LOCATION = "classpath*:prompts/*.yaml";
+
+    /**
+     * 单个模板变量的最大字符数。超限直接拒绝而不是截断：截断会悄悄改变用户数据的
+     * 语义（摘要半篇文章的结果看似合理实则失真），拒绝则把取舍权留给调用方。
+     * 上限取值考虑的是本项目三类任务（摘要/分类/抽取）的合理输入规模与调用成本，
+     * 远小于模型上下文窗口，后续按需调整。
+     */
+    public static final int MAX_VARIABLE_LENGTH = 4000;
+
+    /**
+     * 数据分隔符整行匹配：行内只有 4 个及以上连续 '='（允许首尾空白）。
+     * 模板骨架用 "====" 整行包裹用户数据，如果用户文本里恰好也有这样一行，
+     * 模型看到的数据区会被提前"关闭"，其后的内容就可能被当作指令——这正是
+     * 注入逃逸的入口，渲染前必须中和（见 {@link #neutralizeDelimiter(String)}）。
+     */
+    private static final Pattern DELIMITER_LINE = Pattern.compile("(?m)^[ \\t]*={4,}[ \\t]*$");
 
     /** id -> 模板定义。启动时一次性加载，运行期只读 */
     private final Map<String, PromptTemplateDefinition> templates = new HashMap<>();
@@ -95,7 +116,8 @@ public class PromptTemplateService {
      * @param templateId 模板 id
      * @param variables  运行时变量（key 为变量名）
      * @return 渲染结果，含 System 文本与替换后的 User 文本
-     * @throws PromptTemplateException 模板不存在，或声明的变量缺失/为空时抛出
+     * @throws PromptTemplateException      模板不存在、声明的变量缺失/为空或类型非法时抛出
+     * @throws PromptInputTooLongException  变量文本超过 {@link #MAX_VARIABLE_LENGTH} 时抛出
      */
     public RenderedPrompt render(String templateId, Map<String, Object> variables) {
         PromptTemplateDefinition definition = templates.get(templateId);
@@ -111,12 +133,21 @@ public class PromptTemplateService {
         for (String name : definition.variables()) {
             Object value = provided.get(name);
             // 变量缺失、为 null 或空白都视为无效，宁可报错也不发出残缺 Prompt
-            // 注：超长文本截断、非法类型等更完整的输入边界处理属于 Day19 范围
-            if (value == null || (value instanceof String text && text.isBlank())) {
+            if (value == null || (value instanceof String blank && blank.isBlank())) {
                 missing.add(name);
-            } else {
-                model.put(name, value);
+                continue;
             }
+            // 变量一律要求是字符串：调用方（Controller）负责把列表等结构拼成文本再传入，
+            // 非字符串到达这里说明服务端代码有 bug，直接报错而不是隐式 toString 蒙混过去
+            if (!(value instanceof String text)) {
+                throw new PromptTemplateException(
+                        "模板 [" + templateId + "] 的变量 [" + name + "] 类型非法: "
+                                + value.getClass().getName() + "，必须是字符串");
+            }
+            if (text.length() > MAX_VARIABLE_LENGTH) {
+                throw new PromptInputTooLongException(name, text.length(), MAX_VARIABLE_LENGTH);
+            }
+            model.put(name, neutralizeDelimiter(text));
         }
         if (!missing.isEmpty()) {
             throw new PromptTemplateException(
@@ -148,6 +179,20 @@ public class PromptTemplateService {
                 .map(def -> new PromptSummary(
                         def.id(), def.version(), def.purpose(), def.model(), def.variables()))
                 .toList();
+    }
+
+    /**
+     * 中和用户文本中的数据分隔符，防止其提前"关闭"模板骨架里的数据区。
+     * <p>
+     * 只处理整行都是 '='（4 个及以上）的行——这是模板中 "====" 分隔符唯一可能被
+     * 冒充的形态；行中间夹杂 '=' 的正常文本（如 "a==b"、Markdown 标题下划线以外的用法）
+     * 不受影响。替换方式是把命中行内的半角 '=' 换成全角 '＝'：视觉上几乎无差别、
+     * 不丢内容，但对模型而言不再构成分隔符。这样既守住边界，又把对用户数据的
+     * 改动降到最小（相比整体转义或直接拒绝）。
+     * </p>
+     */
+    private String neutralizeDelimiter(String text) {
+        return DELIMITER_LINE.matcher(text).replaceAll(match -> match.group().replace('=', '＝'));
     }
 
     /**

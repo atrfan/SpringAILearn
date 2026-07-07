@@ -51,6 +51,30 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * 处理模板变量超长：由客户端输入过长触发，返回 HTTP 400 Bad Request。
+     * 异常消息由 {@link PromptInputTooLongException} 自行构造（变量名 + 实际长度 + 上限），
+     * 不含模板内部细节，可以直接透出给调用方。
+     */
+    @ExceptionHandler(PromptInputTooLongException.class)
+    ResponseEntity<ErrorResponse> handleInputTooLong(PromptInputTooLongException exception) {
+        return error(HttpStatus.BAD_REQUEST, "INPUT_TOO_LONG", exception.getMessage());
+    }
+
+    /**
+     * 处理其余 Prompt 模板异常（模板不存在、变量缺失/类型非法）
+     * <p>
+     * 这些情况意味着服务端模板配置或调用代码有问题（Controller 已负责拦截空输入，
+     * 走到渲染层仍缺变量说明是代码 bug），因此返回 HTTP 500；
+     * 具体细节（模板 id、变量名）只记录日志，不透出给客户端。
+     * </p>
+     */
+    @ExceptionHandler(PromptTemplateException.class)
+    ResponseEntity<ErrorResponse> handlePromptTemplateException(PromptTemplateException exception) {
+        LOGGER.error("Prompt 模板配置或渲染错误: {}", exception.getMessage());
+        return error(HttpStatus.INTERNAL_SERVER_ERROR, "PROMPT_TEMPLATE_ERROR", "Prompt 模板配置或渲染错误");
+    }
+
+    /**
      * 处理 AI 模型服务的瞬时性异常（如限流、超时等临时故障）
      * <ul>
      *   <li>若根因是 SocketTimeoutException，返回 HTTP 504 Gateway Timeout</li>
