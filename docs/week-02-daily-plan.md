@@ -5,7 +5,7 @@
 - 日期：2026-06-25（周四）至 2026-07-01（周三）
 - 总投入：约 9.5 小时
 - 工作日：每天 1–1.5 小时；周末：每天 2 小时
-- 技术：Java 21、Spring Boot 3.x、Spring AI、JUnit 5、WireMock、WebTestClient
+- 技术：Java 21、Spring Boot 4.1.0、Spring AI 2.0.0、JUnit 5、WireMock、WebTestClient
 - 原则：保留第一周原生客户端作为对照基准，接入 Spring AI 并实现同步与流式接口，比较两种方案在配置、异常、Token 观测和供应商耦合方面的差异
 
 最终应得到一个独立 Spring Boot 模块、同步 `/api/chat` 和流式 `/api/chat/stream` 端点、Mock 与少量集成测试、一份原生客户端与 Spring AI 的对比报告。
@@ -19,7 +19,7 @@
 **执行任务：**
 
 1. 在 `codes/` 下创建 `spring-ai-chat` 模块（独立 Maven 项目或子模块）。
-2. 固定版本：Java 21、Spring Boot 3.4.x、Spring AI（选择当前稳定版）、Jackson。
+2. 固定版本：Java 21、Spring Boot 4.1.0、Spring AI 2.0.0、Jackson。
 3. 配置 `application.yml`：模型名称、API Key（通过环境变量 `${DEEPSEEK_KEY}`）、base URL、超时参数。
 4. 引入 Spring AI 的 OpenAI 兼容 starter（DeepSeek 兼容 OpenAI 协议）。
 5. 编写启动类，验证 Spring Boot 能正常启动。

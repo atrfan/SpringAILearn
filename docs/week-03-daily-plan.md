@@ -5,7 +5,7 @@
 - 日期：2026-07-02（周四）至 2026-07-08（周三）
 - 总投入：约 10.5 小时
 - 工作日：每天 1–1.5 小时；周末：每天 2 小时
-- 技术：Java 21、Spring Boot 3.x、Spring AI（`PromptTemplate`、`SystemMessage`/`UserMessage`）、Jackson、Bean Validation
+- 技术：Java 21、Spring Boot 4.1.0、Spring AI 2.0.0（`PromptTemplate`、`SystemMessage`/`UserMessage`）、Jackson、Bean Validation
 - 原则：本周把重心放在**开发**上，构建一套可复用、可版本化的 Prompt 模板基础设施，并落地摘要、分类、信息抽取三类模板端点；测试相关内容相比第二周明显收缩，只保留一次轻量验证与一次最小 A/B 对照，不再追求覆盖矩阵。
 
 最终应得到：一个 Prompt 模板抽象层（模板存储 + 变量绑定 + 版本元数据）、三个基于模板的业务端点（`/api/summarize`、`/api/classify`、`/api/extract`）、模板变量的边界与注入防护处理，以及一份 Prompt 设计与变量边界笔记。
