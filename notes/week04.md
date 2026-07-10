@@ -1,0 +1,199 @@
+# 第 4 周学习笔记：结构化输出与输出可信
+
+> **学习日期：** 2026-07-09～
+>
+> **学习阶段：** 第 4 周（第一个硬性里程碑周）
+>
+> **文档定位：** 记录结构化输出的核心概念（Record / JSON Schema / Bean Validation 的分工、三类错误框架、失败处理链），并沉淀本周的关键设计决定（"未提及"映射、错误码方案、重试上限）。本周把 `/api/extract` 从 JSON 文本透传升级为经解析与校验的 Java 对象，并以 30+ 案例验收报告收口阶段项目一。
+>
+> **当前进度：** Day23 完成——`/api/extract` 已升级为基于 `BeanOutputConverter` 的结构化输出，返回解析后的 `ExtractResult`；"未提及→null" 映射经真实调用验证成立。（Day22 概念框架的第 1、3、4 节留待补写。）
+
+第三周的技术债务第 1 条指出：抽取结果仅做 JSON 文本透传，服务端不解析、不校验。本周的核心主题是**输出可信**——"看起来像 JSON 的文本"不等于机器可消费的结果，下游需要的是形状确定、内容经过校验的对象。这也是对 Day19 注入结论（"可靠防线是输出侧收敛与校验"）在抽取端点上的落地。
+
+## 目录
+
+- [1. 为什么 JSON 文本不能直接给下游](#1-为什么-json-文本不能直接给下游)
+- [2. Record / JSON Schema / Bean Validation 的分工](#2-record--json-schema--bean-validation-的分工)
+- [3. 三类错误框架](#3-三类错误框架)
+- [4. 失败处理链](#4-失败处理链)
+- [5. 本周设计决定](#5-本周设计决定)
+- [每日记录](#每日记录)
+- [参考资料](#参考资料)
+
+---
+
+## 1. 为什么 JSON 文本不能直接给下游
+
+<!-- 用自己的话回答：透传文本时，非法 JSON、缺字段、错类型、编造值分别会在下游的什么位置爆炸？为什么"在下游各处防御"不如"在边界处一次拦截"？ -->
+
+【待填】
+
+### 三者的职责边界
+
+| 组件 | 管什么 | 在链路哪一步生效 |
+| --- | --- | --- |
+| `ExtractResult`（Record） | 定义**目标形状**：字段名、类型、可空性。只是数据载体，本身没有行为。 | 贯穿始终，是"契约"本身 |
+| `BeanOutputConverter`（Day23 落地） | 桥接模型与 Record 的**两半职责**：`getFormat()` 从 Record 生成 JSON Schema 指令，`convert()` 把模型文本反序列化为 Record。 | 请求端注入 Schema + 响应端解析 |
+| Bean Validation（Day24） | 解析成功后，对字段**内容**做声明式校验。 | 解析之后、对象流出之前 |
+
+### BeanOutputConverter 的两半职责（今天的核心）
+
+converter 有一对方法，它们是同一个契约的两端：
+
+- `getFormat()` —— **请求端**：生成"你必须按这个 JSON 结构输出"的指令文本，拼进 system 发给模型。
+- `convert(text)` —— **响应端**：把模型吐回的文本，按同一结构解析成 `ExtractResult`。
+
+**核心原则：契约两端必须对齐。** 响应端用什么结构解析，请求端就必须用什么结构要求；而两半都来自**同一个 converter 对象**（`new BeanOutputConverter<>(ExtractResult.class)`），所以天然一致——这正是它取代手写 JSON 约定的价值。
+
+> 今天卡过的坑：只调 `convert()` 不调 `getFormat()`，相当于"出口按严格表格读数据，入口却从没把表格发出去"——模型不知道该输出什么结构，`convert()` 大概率解析失败。**注入 Schema（`getFormat()` 拼进 system）这一步不能省。**
+
+另一个易混点：**converter 的泛型对应"模型输出的数据形状"（`ExtractResult`），不是响应体 `ExtractResponse`**。后者是"数据 + 我们事后补的元信息（model/token/耗时）"，模型不该也无法输出这些。
+
+### 单一事实来源
+
+原来 `extract.yaml` 里手写"键为 name/date/amount"，一旦 Record 改字段、忘了改模板，两边就脱节。改用 `getFormat()` 后，Schema 从 `ExtractResult` **自动生成**：结构只在 Record 定义一次，请求指令与解析逻辑都从它派生，改 Record 则 Schema 自动同步。
+
+### 一条链（本周整体）
+
+```
+提示词(system + 注入的 Schema) → 模型输出文本 → convert() 解析(格式层)
+    → Bean Validation(语义层, Day24) → 业务规则(Day24) → 对象流出
+```
+
+## 3. 三类错误框架
+
+本周核心概念框架。Day24 的错误码映射、Day26 的 20+ 条离线用例都按这个分类组织。
+
+| 错误类别 | 定义（自己的话） | 拦截层 | 抽取场景例子 |
+| --- | --- | --- | --- |
+| 格式错误 | 【待填】 | 解析层 | 【待填，如：输出被 markdown 代码块包裹导致解析失败】 |
+| 语义错误 | 【待填】 | 校验层（Bean Validation） | 【待填，如：amount 抽出 "-1200元"】 |
+| 业务校验错误 | 【待填】 | 业务规则层（服务层自定义校验器） | 【待填，如：有金额但日期缺失】 |
+
+<!-- 每类补一句"为什么必须在这一层拦、放到别的层拦为什么不对"。 -->
+
+## 4. 失败处理链
+
+修复提示 → 有限重试 → 降级响应。
+
+<!-- 用自己的话回答三个问题：
+1. 修复提示回喂什么内容？（上一次的原始输出 + 具体失败原因）
+2. 为什么重试必须有硬上限？（成本失控 / 无限循环）
+3. 降级时为什么不能返回最后一次的原始文本？（等于把"输出不可信"的东西又透传给下游，回到起点） -->
+
+【待填】
+
+## 5. 本周设计决定
+
+### 5.1 ExtractResult Record 与"未提及"映射决定
+
+现状：`extract.yaml` v1 约定字段未提及时输出字符串 `"未提及"`（哨兵值）。映射到 Record 后必须做选择，这个决定影响后续所有校验注解的写法。
+
+候选方案：
+
+| 方案 | 优点 | 代价 |
+| --- | --- | --- |
+| 映射为 `null` | 校验注解可用"可空、非空时须满足 X"的自然写法 | 需改模板约定让模型输出 JSON `null`，少样本同步改 |
+| 保留哨兵字符串 | 模板不用动 | 字段永远非空，所有校验注解都要绕开哨兵值，下游每次判一遍 |
+| `Optional` 字段 | 语义最明确 | Jackson 对 Record + Optional 需额外配置，校验注解写法更绕 |
+
+**决定：** 未提及的字段映射为 **`null`**；三个字段均为 `String`（`amount` 保留原文写法，如 `"1200元"`，不拆数值与币种）。哨兵字符串 `"未提及"` 只是模型的输出约定，进入 Java 边界后必须消失——由 Day23 改模板让模型对未提及字段输出 JSON `null`。
+
+**理由：**
+
+1. **Bean Validation 的语义天然围绕 `null` 展开**，映射为 `null` 能让 Day24 的校验注解用最自然的写法：
+   - 必填字段加 `@NotNull` / `@NotBlank`；
+   - 可空字段不加 `@NotNull`，而 `@Pattern`、`@Size`、`@Positive` 等约束对 `null` 默认放行——正好等于"未提及就跳过、提及了才校验格式"的需求，无需任何特判。
+2. **拒绝哨兵字符串泄漏**：若保留 `"未提及"`，字段永远非空，每个校验注解都要特意排除这个魔法值，且下游每处都得写 `if (!"未提及".equals(x))`，把一个模型约定扩散成全链路的隐性契约。`null` 把"缺失"的判断收敛在边界一次完成。
+3. **不选 `Optional`**：语义虽最明确，但 Jackson 对 `record` + `Optional` 反序列化需 `Jdk8Module`，且校验要写成 `Optional<@Pattern(...) String>` 的容器元素约束，工程成本与本周收益不匹配。可空性用 `@NotNull` 的有无表达已经足够。
+4. **`amount` 保留 `String` 原文**：模型直接吐数值容易丢币种、被千分位/中文数字干扰而更不稳定。Day24 的"数值性"校验用 `@Pattern`（数字 + 可选单位）承担即可；是否拆成 `BigDecimal amount + String currency` 留到确有下游计算需求时再说，不在本周过度设计。
+
+**未提及映射对可空性的影响（Day24 落地时据此写注解）：**
+
+- `name` / `date` / `amount` 三者都可能"未提及" → 都是**可空**字段，均不强制 `@NotNull`。
+- "三者全空说明这条抽取无实质结果"属于**业务约束**（见 5.4），放到服务层校验，不在字段注解里表达。
+
+**Record 定稿（`model` 包，已落地并通过真实调用验证）：**
+
+```java
+public record ExtractResult(
+        String name,    // 人物姓名；未提及 -> null
+        String date,    // 事件日期，保留原文写法；未提及 -> null
+        String amount   // 金额，含币种/单位的原文（如 "1200元"）；未提及 -> null
+) {}
+```
+
+- **踩坑记录**：初版把 `date` 误写成 `data`。Record 字段名靠 Jackson 匹配 JSON 键，名字对不上会**静默**映射失败（字段恒为 null、不报错），是最难查的一类 bug。
+- **验证结论**：真实调用「陈明提交了一份报销申请。」返回 `{name:"陈明", date:null, amount:null}`——`date`/`amount` 是 JSON `null` 而非字符串，"未提及→null" 整条链路成立。
+
+> **Day23 联动（已完成）：** `extract.yaml` 升到 v2——删除手写的 JSON 结构约束（交给 Schema）、"未提及"改为输出 JSON `null`、第二条少样本输出改为 `{"name":null,"date":null,"amount":null}`。提示里要明确写 JSON `null`（空值字面量）而**非**字符串 `"null"`：否则反序列化出的是字符串 `"null"`，会绕过 null 语义、泄漏成哨兵值。
+
+### 5.2 三类错误的错误码方案
+
+复用 `ErrorResponse` 结构。Day25 的"重试耗尽"错误码一并定下。
+
+| 错误类别 | 错误码 | HTTP 状态 | 触发条件 |
+| --- | --- | --- | --- |
+| 格式错误（解析异常） | 【待填】 | 【待填】 | 输出非法 JSON / 缺字段 / 错类型 |
+| 语义错误（Bean Validation 违例） | 【待填】 | 【待填】 | 字段内容不合理 |
+| 业务校验错误（自定义校验器违例） | 【待填】 | 【待填】 | 字段组合违反业务约束 |
+| 重试耗尽（无法可靠解析） | 【待填】 | 【待填】 | 达到重试上限仍未通过解析与校验 |
+
+<!-- 命名风格与项目里已有错误码保持一致；HTTP 状态想清楚"是调用方的错还是模型/服务端的错"。 -->
+
+### 5.3 重试上限与失败样本记录形式
+
+- **重试上限：** 【待填一个数字，计划建议 2 次，即最多 3 次调用】
+- **失败样本记录形式：** 【待填：结构化日志 or 落地文件；每条至少含原始输出、失败原因、错误类别、重试轮次】
+- **可观测性约定：** 【待填：响应元信息或日志中如何暴露本次实际重试次数】
+
+### 5.4 字段间业务约束（Day24 落地）
+
+<!-- 至少一条字段组合约束，例如"金额存在时日期不得缺失"，或按自己的业务语义自定。先在这里定下来，Day24 直接实现。 -->
+
+【待填】
+
+## 每日记录
+
+### 2026-07-09（Day22）
+
+- 实际投入：
+- 今日目标：建立结构化输出概念框架，完成 Record 设计、"未提及"映射决定、错误码方案、重试上限决定
+- 完成内容：
+- 产出路径：`notes/week04.md`
+- 测试或实验结果：（今日无编码，不适用）
+- 遇到的问题：
+- 明日调整：进入 Day23，定义 `ExtractResult` Record，用 `BeanOutputConverter` 改造 `/api/extract`，调整 `extract.yaml`（红线：不允许字符串截取或正则"猜"JSON）
+
+### 2026-07-10（Day23）
+
+- 实际投入：
+- 今日目标：用 `BeanOutputConverter` 把 `/api/extract` 升级为返回 `ExtractResult` 结构化对象，格式约束改由 Schema 承担
+- 完成内容：
+  - 新建 `ExtractResult` Record（三个 `String` 字段，未提及→null）；
+  - `extract.yaml` 升 v2：删手写 JSON 结构约束、哨兵值改 JSON `null`、少样本同步改；
+  - 新建 `ExtractService`，走**路线 B（手动 `BeanOutputConverter`）**：`getFormat()` 拼到 system 末尾 → `new` 一个含 Schema 的 `RenderedPrompt`（record 不可变，只能造新的）→ `promptChatService.chat()` 拿原始文本 → `convert()` 解析 → 组装 `ExtractResponse`（data + 模型/token/耗时元信息）；
+  - `ChatController.extract()` 改为返回 `ExtractResponse`，render 从 Controller 搬进 Service（因为拼 Schema 依赖 converter，是 Service 的内部知识）。
+- 产出路径：`model/ExtractResult.java`、`model/ExtractResponse.java`、`service/ExtractService.java`、`controller/ChatController.java`、`resources/prompts/extract.yaml`
+- 测试或实验结果：`mvnw compile` BUILD SUCCESS；手动调 `/api/extract` 两例——齐全样本三字段抽全，部分未提及样本 `date`/`amount` 返回 JSON `null`，均符合预期。
+- 遇到的问题：
+  - 三处"编译能过、静默出错/渲染报错"的低级但典型错误：`date` 误写 `data`（静默映射失败）、模板 id 误写 `extractw`（render 找不到模板）、换行符写成 `/n/n`（应为 `\n\n`）。
+  - 路线选择：选**路线 B（手动 converter）**而非 `ChatClient.entity()`，因为要把模型**原始文本留在手里**，为 Day25 的"失败回喂重试"铺路；entity() 会把原始文本吞在框架内部。
+  - `chat()` 是不懂业务的"搬运工"，只把 `RenderedPrompt` 的 system/user 原样发出——所以 Schema 必须在 `chat()` **之前**拼进 system，它不会主动加。
+- 明日调整：进入 Day24，三层校验——补 `spring-boot-starter-validation`、给 `ExtractResult` 加校验注解（可空字段不加 `@NotNull`，`@Pattern`/`@Size` 对 null 放行）、加一条服务层业务约束、`GlobalExceptionHandler` 映射格式/语义/业务三类可区分错误码。
+
+## 本周思考题（Day28 回答）
+
+> 模型返回格式合法但业务事实错误时，结构化输出解决了什么，又没有解决什么？
+> （提示：它保证形状正确，不保证内容真实——这条边界决定了第 7 周起 RAG 引证的必要性。）
+
+【待填】
+
+## 参考资料
+
+- [Spring AI Structured Output](https://docs.spring.io/spring-ai/reference/api/structured-output-converter.html)
+- [Spring AI ChatClient](https://docs.spring.io/spring-ai/reference/api/chatclient.html)
+- [Jakarta Bean Validation](https://beanvalidation.org/)
+- [JUnit 5 Parameterized Tests](https://junit.org/junit5/docs/current/user-guide/#writing-tests-parameterized-tests)
+- [第三周学习笔记](./week03.md)
+- [第四周每日计划](../docs/week-04-daily-plan.md)

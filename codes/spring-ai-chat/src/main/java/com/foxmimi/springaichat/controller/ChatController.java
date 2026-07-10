@@ -1,16 +1,7 @@
 package com.foxmimi.springaichat.controller;
 
-import com.foxmimi.springaichat.model.ChatRequest;
-import com.foxmimi.springaichat.model.ChatResponse;
-import com.foxmimi.springaichat.model.ClassifyRequest;
-import com.foxmimi.springaichat.model.ExtractRequest;
-import com.foxmimi.springaichat.model.PromptSummary;
-import com.foxmimi.springaichat.model.RenderedPrompt;
-import com.foxmimi.springaichat.model.SummarizeRequest;
-import com.foxmimi.springaichat.service.ClassifyService;
-import com.foxmimi.springaichat.service.MyChatService;
-import com.foxmimi.springaichat.service.PromptChatService;
-import com.foxmimi.springaichat.service.PromptTemplateService;
+import com.foxmimi.springaichat.model.*;
+import com.foxmimi.springaichat.service.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
@@ -45,23 +36,26 @@ class ChatController {
     private final ClassifyService classifyService;
 
     private final PromptTemplateService promptTemplateService;
+    private final ExtractService extractService;
 
     /**
-     * 通过构造器注入聊天服务、Prompt 调用服务、分类服务与模板服务
+     * 通过构造器注入聊天服务、Prompt 调用服务、分类服务、模板服务与抽取服务
      *
      * @param chatService            聊天服务实例
      * @param promptChatService      Prompt 调用服务实例，摘要与分类共用
      * @param classifyService        分类服务实例，负责分类结果归一化
      * @param promptTemplateService  Prompt 模板服务实例
+     * @param extractService         抽取服务实例，负责结构化输出的 Schema 注入与解析
      */
     ChatController(MyChatService chatService,
-                    PromptChatService promptChatService,
-                    ClassifyService classifyService,
-                    PromptTemplateService promptTemplateService) {
+                   PromptChatService promptChatService,
+                   ClassifyService classifyService,
+                   PromptTemplateService promptTemplateService, ExtractService extractService) {
         this.chatService = chatService;
         this.promptChatService = promptChatService;
         this.classifyService = classifyService;
         this.promptTemplateService = promptTemplateService;
+        this.extractService = extractService;
     }
 
     /**
@@ -190,24 +184,23 @@ class ChatController {
     /**
      * 处理信息抽取请求
      * <p>
-     * 接收 POST 请求 {@code /api/extract}，渲染抽取模板后交给模型，从文本中抽取
-     * 姓名、日期、金额三个固定字段，以简单 JSON 文本返回（字段缺失时约定为"未提及"）。
-     * 本周结果先以文本形式返回，严格的结构化解析与校验留到第四周。
+     * 接收 POST 请求 {@code /api/extract}，渲染抽取模板并注入结构化输出 Schema 后交给模型，
+     * 从文本中抽取姓名、日期、金额三个固定字段，返回解析后的 {@link ExtractResult} 结构化对象
+     * （字段未提及时为 {@code null}）。
      * </p>
      *
      * @param request 抽取请求体，包含待抽取的文本
-     * @return 抽取响应，content 字段为模型返回的 JSON 文本
+     * @return 抽取响应 {@link ExtractResponse}，{@code data} 字段为解析后的 {@link ExtractResult}，
+     *         并附带模型名、Token 用量与耗时等元信息
      * @throws IllegalArgumentException 当消息为空或仅包含空白字符时抛出
      */
     @PostMapping("/extract")
-    ChatResponse extract(@RequestBody ExtractRequest request) {
+    ExtractResponse extract(@RequestBody ExtractRequest request) {
         // 校验请求体和消息内容不能为空
         if (request == null || !StringUtils.hasText(request.message())) {
             throw new IllegalArgumentException("message 不能为空");
         }
-
-        RenderedPrompt render = promptTemplateService.render("extract", Map.of("content", request.message().trim()));
-        return promptChatService.chat(render);
+        return extractService.extract(request.message().trim());
     }
 
     /**
