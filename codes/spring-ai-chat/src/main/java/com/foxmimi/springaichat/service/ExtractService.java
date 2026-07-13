@@ -1,11 +1,16 @@
 package com.foxmimi.springaichat.service;
 
+import com.foxmimi.springaichat.exception.ExtractBusinessException;
+import com.foxmimi.springaichat.exception.ExtractFormatException;
+import com.foxmimi.springaichat.exception.ExtractSemanticException;
 import com.foxmimi.springaichat.model.ChatResponse;
 import com.foxmimi.springaichat.model.ExtractResponse;
 import com.foxmimi.springaichat.model.ExtractResult;
 import com.foxmimi.springaichat.model.RenderedPrompt;
 import org.springframework.ai.converter.BeanOutputConverter;
 import org.springframework.stereotype.Service;
+import tools.jackson.core.exc.StreamReadException;
+import jakarta.validation.Validator;
 
 import java.util.Map;
 
@@ -17,10 +22,12 @@ public class ExtractService {
     private final PromptChatService promptChatService;
 
     private final PromptTemplateService promptTemplateService;
+    private final Validator validator;
 
-    public ExtractService(PromptChatService promptChatService, PromptTemplateService promptTemplateService) {
+    public ExtractService(PromptChatService promptChatService, PromptTemplateService promptTemplateService, Validator validator) {
         this.promptChatService = promptChatService;
         this.promptTemplateService = promptTemplateService;
+        this.validator = validator;
     }
 
     public ExtractResponse extract(String message) {
@@ -28,7 +35,20 @@ public class ExtractService {
         String systemWithSchema = base.system() + "\n\n" + converter.getFormat();
         RenderedPrompt withSchema = new RenderedPrompt(base.templateId(), base.version(), base.model(), systemWithSchema, base.user()); // recode 类属性是final，所以不能直接修改ase的属性，而是重新创建一个对象
         ChatResponse raw = promptChatService.chat(withSchema);
-        var result = converter.convert(raw.content());
+        ExtractResult result = null;
+       try{
+           result = converter.convert(raw.content());
+       }catch (StreamReadException e){
+           throw new ExtractFormatException("AI 模型返回的抽取结果无法解析为 JSON", raw.content());
+       }
+       if(!validator.validate(result).isEmpty()){
+           throw new ExtractSemanticException("AI 模型返回的抽取结果未通过语义校验（Bean Validation），字段内容不符合约定格式", raw.content());
+       }
+
+       if(result.date() == null && result.name() == null && result.amount() == null){
+           throw new ExtractBusinessException("AI 模型返回的抽取结果违反业务规则：name/date/amount 三字段全部为 null，视为本次抽取未产出有效信息。", raw.content());
+       }
+
         return new ExtractResponse(
                 raw.model(),
                 result,

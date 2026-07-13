@@ -109,6 +109,33 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * 处理抽取结果解析失败（AI 输出无法解析为合法 JSON），返回 HTTP 502 Bad Gateway
+     */
+    @ExceptionHandler(ExtractFormatException.class)
+    ResponseEntity<ErrorResponse> handleExtractFormatException(ExtractFormatException exception) {
+        LOGGER.error("抽取结果解析失败，原始响应内容: {}", exception.getRawContent());
+        return error(HttpStatus.BAD_GATEWAY, "EXTRACT_FORMAT_ERROR", exception.getMessage());
+    }
+
+    /**
+     * 处理抽取结果字段内容未通过 Bean Validation 校验，返回 HTTP 502 Bad Gateway
+     */
+    @ExceptionHandler(ExtractSemanticException.class)
+    ResponseEntity<ErrorResponse> handleExtractSemanticException(ExtractSemanticException exception) {
+        LOGGER.error("抽取结果未通过语义校验，原始响应内容: {}", exception.getRawContent());
+        return error(HttpStatus.BAD_GATEWAY, "EXTRACT_SEMANTIC_ERROR", exception.getMessage());
+    }
+
+    /**
+     * 处理抽取结果违反服务层自定义业务规则（如三字段全部为 null），返回 HTTP 502 Bad Gateway
+     */
+    @ExceptionHandler(ExtractBusinessException.class)
+    ResponseEntity<ErrorResponse> handleExtractBusinessException(ExtractBusinessException exception) {
+        LOGGER.error("抽取结果违反业务规则，原始响应内容: {}", exception.getRawContent());
+        return error(HttpStatus.BAD_GATEWAY, "EXTRACT_BUSINESS_ERROR", exception.getMessage());
+    }
+
+    /**
      * 构建统一格式的错误响应
      *
      * @param status  HTTP 状态码

@@ -6,7 +6,7 @@
 >
 > **文档定位：** 记录结构化输出的核心概念（Record / JSON Schema / Bean Validation 的分工、三类错误框架、失败处理链），并沉淀本周的关键设计决定（"未提及"映射、错误码方案、重试上限）。本周把 `/api/extract` 从 JSON 文本透传升级为经解析与校验的 Java 对象，并以 30+ 案例验收报告收口阶段项目一。
 >
-> **当前进度：** Day23 完成——`/api/extract` 已升级为基于 `BeanOutputConverter` 的结构化输出，返回解析后的 `ExtractResult`；"未提及→null" 映射经真实调用验证成立。（Day22 概念框架的第 1、3、4 节留待补写。）
+> **当前进度：** Day24 完成——`ExtractResult` 加上语义层校验注解，`ExtractService` 落地格式/语义/业务三层校验，`GlobalExceptionHandler` 新增三个可区分错误码（`EXTRACT_FORMAT_ERROR`/`EXTRACT_SEMANTIC_ERROR`/`EXTRACT_BUSINESS_ERROR`），业务错误与语义错误均经真实调用验证；格式错误路径留给 Day26 离线测试验证。（Day22 概念框架的第 1、3、4 节留待补写。）
 
 第三周的技术债务第 1 条指出：抽取结果仅做 JSON 文本透传，服务端不解析、不校验。本周的核心主题是**输出可信**——"看起来像 JSON 的文本"不等于机器可消费的结果，下游需要的是形状确定、内容经过校验的对象。这也是对 Day19 注入结论（"可靠防线是输出侧收敛与校验"）在抽取端点上的落地。
 
@@ -134,9 +134,9 @@ public record ExtractResult(
 
 | 错误类别 | 错误码 | HTTP 状态 | 触发条件 |
 | --- | --- | --- | --- |
-| 格式错误（解析异常） | 【待填】 | 【待填】 | 输出非法 JSON / 缺字段 / 错类型 |
-| 语义错误（Bean Validation 违例） | 【待填】 | 【待填】 | 字段内容不合理 |
-| 业务校验错误（自定义校验器违例） | 【待填】 | 【待填】 | 字段组合违反业务约束 |
+| 格式错误（解析异常） | `EXTRACT_FORMAT_ERROR` | 502 | 输出非法 JSON / 缺字段 / 错类型 |
+| 语义错误（Bean Validation 违例） | `EXTRACT_SEMANTIC_ERROR` | 502 | 字段内容不合理 |
+| 业务校验错误（自定义校验器违例） | `EXTRACT_BUSINESS_ERROR` | 502 | 返回的 json 字段中全为 null |
 | 重试耗尽（无法可靠解析） | 【待填】 | 【待填】 | 达到重试上限仍未通过解析与校验 |
 
 <!-- 命名风格与项目里已有错误码保持一致；HTTP 状态想清楚"是调用方的错还是模型/服务端的错"。 -->
@@ -149,9 +149,9 @@ public record ExtractResult(
 
 ### 5.4 字段间业务约束（Day24 落地）
 
-<!-- 至少一条字段组合约束，例如"金额存在时日期不得缺失"，或按自己的业务语义自定。先在这里定下来，Day24 直接实现。 -->
+`name`/`date`/`amount` 三个字段之间没有天然的逻辑约束，单看字段本身，任何组合（只有一个字段、甚至一个都没有）都是合理的——因为输入文本内容本身是任意的、不受限的。
 
-【待填】
+但本接口的前提假设是：**输入总是与报销场景相关的描述**。基于这个前提，若三字段全部为 `null`，说明这次抽取没有产出任何有效信息——不管具体原因是原文本身信息不足、还是模型没理解好，在"输入必是报销相关"这个假设下，全空结果本身就值得报错让调用方知道，而不是静默放行一个空对象给下游，属于业务规则违反（`EXTRACT_BUSINESS_ERROR`）。
 
 ## 每日记录
 
@@ -181,6 +181,32 @@ public record ExtractResult(
   - 路线选择：选**路线 B（手动 converter）**而非 `ChatClient.entity()`，因为要把模型**原始文本留在手里**，为 Day25 的"失败回喂重试"铺路；entity() 会把原始文本吞在框架内部。
   - `chat()` 是不懂业务的"搬运工"，只把 `RenderedPrompt` 的 system/user 原样发出——所以 Schema 必须在 `chat()` **之前**拼进 system，它不会主动加。
 - 明日调整：进入 Day24，三层校验——补 `spring-boot-starter-validation`、给 `ExtractResult` 加校验注解（可空字段不加 `@NotNull`，`@Pattern`/`@Size` 对 null 放行）、加一条服务层业务约束、`GlobalExceptionHandler` 映射格式/语义/业务三类可区分错误码。
+
+### 2026-07-13（Day24）
+
+- 实际投入：
+- 今日目标：落地三层校验——格式层（解析异常）、语义层（Bean Validation）、业务层（自定义规则），并让三类错误返回可区分的错误码
+- 完成内容：
+  - 补 `spring-boot-starter-validation` 依赖；
+  - `ExtractResult` 加校验注解：`name` 加 `@Size(max = 10)`，`amount` 加 `@Pattern(regexp = "\\d+[元￥]")`（数字+单位，二者对 null 均默认放行），`date` 保持无约束（prompt 未对格式做任何约定）；
+  - 新建 `ExtractFormatException` / `ExtractSemanticException` / `ExtractBusinessException` 三个异常类，均带 `rawContent` 字段（不参与 `getMessage()`，只供日志使用，避免原始模型输出泄漏给客户端）；
+  - `ExtractService.extract()` 接入 `jakarta.validation.Validator`，按"格式解析 → 语义校验 → 业务规则（三字段全空）"顺序落地三层校验，全部只负责抛异常、不打日志；
+  - `GlobalExceptionHandler` 新增三个独立 `@ExceptionHandler`，分别返回 502 + `EXTRACT_FORMAT_ERROR` / `EXTRACT_SEMANTIC_ERROR` / `EXTRACT_BUSINESS_ERROR`，日志集中在这里用 `exception.getRawContent()` 打印原始响应。
+  - 同步补了 5.2（错误码方案：统一 502，靠字符串错误码区分）、5.4（业务约束：假设输入总与报销相关，三字段全空视为抽取失败）两处设计决定。
+- 产出路径：`model/ExtractResult.java`、`exception/ExtractFormatException.java`、`exception/ExtractSemanticException.java`、`exception/ExtractBusinessException.java`、`service/ExtractService.java`、`exception/GlobalExceptionHandler.java`、`notes/week04.md`
+- 测试或实验结果：`mvnw compile` 通过；手动调用 `/api/extract` 三例——
+  - 业务错误：输入与报销无关文本（"今天天气不错…"），三字段全 null，返回 `EXTRACT_BUSINESS_ERROR`，符合预期；
+  - 语义错误：输入"报销了1200美元"，模型抽出 `amount:"1200美元"`（"美元"两字符不满足 `[元￥]` 单字符单位），返回 `EXTRACT_SEMANTIC_ERROR`，符合预期；
+  - 格式错误：用提示注入尝试让模型跳出 JSON 输出，模型仍遵守 Schema 输出合法 JSON（三字段全 null），未能触发 `EXTRACT_FORMAT_ERROR`——格式错误路径依赖模型偶然输出非法 JSON，无法通过真实调用稳定复现，留给 Day26 离线测试用伪造字符串直接验证。
+- 遇到的问题：
+  - `@Pattern` 没有名为 `value` 的属性，必须显式写 `regexp = "..."`，写成 `@Pattern("...")` 直接编译不过；
+  - 正则里的反斜杠在 Java 字符串字面量中要二次转义（`\d` 非法，须写 `\\d`）；
+  - 字符类 `[...]` 内部的 `|` 不表示"或"，会被当成普通候选字符（`[元|￥]` 实际是"元/|/￥ 三选一"）——"或"关系只能靠列举字符本身表达，多字符候选要跳出字符类用分组 `(元|人民币|美元)`；
+  - 误注入 `org.springframework.validation.Validator`（Spring 自己的校验接口）而非 `jakarta.validation.Validator`（Bean Validation 标准接口），两者互不相关，前者读不到 `@Size`/`@Pattern` 注解；
+  - 对可能为 `null` 的字段调用 `.isEmpty()` 直接 NPE——"未提及→null"这条 Day23 决定必须贯彻到所有判空逻辑，不能想当然用字符串判空方法；
+  - 一度把三个异常合并进一个 `@ExceptionHandler` 共用 `EXTRACT_ERROR` 一个错误码，违反了"可区分错误码"的验收标准，拆回三个独立 handler；
+  - 原始模型响应内容不能直接拼进异常 `message`（会被 Handler 透给客户端），但 Service 层按项目既有约定不该打日志——最终方案是给异常类加独立的 `rawContent` 字段，`getMessage()` 只给客户端安全文案，日志统一收到 `GlobalExceptionHandler` 里用 `getRawContent()` 打印。
+- 明日调整：进入 Day25，有限重试 + 修复提示 + 失败样本记录；重试耗尽降级为独立错误码（不透传原始文本）；重试次数需可观测。
 
 ## 本周思考题（Day28 回答）
 
