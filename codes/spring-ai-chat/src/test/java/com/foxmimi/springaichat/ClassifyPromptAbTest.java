@@ -1,6 +1,6 @@
 package com.foxmimi.springaichat;
 
-import com.foxmimi.springaichat.model.RenderedPrompt;
+import com.foxmimi.springaichat.model.domain.RenderedPrompt;
 import com.foxmimi.springaichat.service.PromptTemplateService;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;

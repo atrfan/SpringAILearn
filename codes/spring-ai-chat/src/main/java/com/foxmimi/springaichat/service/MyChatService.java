@@ -1,7 +1,7 @@
 package com.foxmimi.springaichat.service;
 
 import com.foxmimi.springaichat.exception.UpstreamResponseException;
-import com.foxmimi.springaichat.model.ChatResponse;
+import com.foxmimi.springaichat.model.response.ChatResponse;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.metadata.ChatResponseMetadata;
 import org.springframework.ai.chat.metadata.Usage;

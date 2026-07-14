@@ -1,5 +1,7 @@
 package com.foxmimi.springaichat.exception;
 
+import com.foxmimi.springaichat.handler.GlobalExceptionHandler;
+
 /**
  * 抽取结果业务规则异常
  * <p>

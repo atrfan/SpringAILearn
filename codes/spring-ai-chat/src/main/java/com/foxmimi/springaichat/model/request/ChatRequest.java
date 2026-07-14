@@ -1,4 +1,4 @@
-package com.foxmimi.springaichat.model;
+package com.foxmimi.springaichat.model.request;
 
 /**
  * 聊天请求体

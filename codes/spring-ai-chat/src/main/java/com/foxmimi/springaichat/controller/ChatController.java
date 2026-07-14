@@ -1,6 +1,8 @@
 package com.foxmimi.springaichat.controller;
 
-import com.foxmimi.springaichat.model.*;
+import com.foxmimi.springaichat.model.domain.*;
+import com.foxmimi.springaichat.model.request.*;
+import com.foxmimi.springaichat.model.response.*;
 import com.foxmimi.springaichat.service.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

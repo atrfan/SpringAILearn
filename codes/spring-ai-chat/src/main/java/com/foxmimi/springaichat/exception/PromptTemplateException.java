@@ -1,5 +1,7 @@
 package com.foxmimi.springaichat.exception;
 
+import com.foxmimi.springaichat.handler.GlobalExceptionHandler;
+
 /**
  * Prompt 模板异常
  * <p>

@@ -1,4 +1,4 @@
-package com.foxmimi.springaichat.model;
+package com.foxmimi.springaichat.model.domain;
 
 /**
  * 渲染后的 Prompt

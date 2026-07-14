@@ -1,6 +1,13 @@
-package com.foxmimi.springaichat.exception;
+package com.foxmimi.springaichat.handler;
 
-import com.foxmimi.springaichat.model.ErrorResponse;
+import com.foxmimi.springaichat.exception.ExtractBusinessException;
+import com.foxmimi.springaichat.exception.ExtractFormatException;
+import com.foxmimi.springaichat.exception.ExtractRetryExhaustedException;
+import com.foxmimi.springaichat.exception.ExtractSemanticException;
+import com.foxmimi.springaichat.exception.PromptInputTooLongException;
+import com.foxmimi.springaichat.exception.PromptTemplateException;
+import com.foxmimi.springaichat.exception.UpstreamResponseException;
+import com.foxmimi.springaichat.model.response.ErrorResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.retry.*;
@@ -135,6 +142,9 @@ public class GlobalExceptionHandler {
         return error(HttpStatus.BAD_GATEWAY, "EXTRACT_BUSINESS_ERROR", exception.getMessage());
     }
 
+    /**
+     * 处理抽取重试耗尽（多次尝试仍未通过格式/语义校验），返回 HTTP 502 Bad Gateway
+     */
     @ExceptionHandler(ExtractRetryExhaustedException.class)
     ResponseEntity<ErrorResponse> handleExtractRetryExhaustedException(ExtractRetryExhaustedException exception) {
         LOGGER.error("抽取结果多次尝试仍未产出有效信息，原始响应内容: {}", exception.getRawContent());

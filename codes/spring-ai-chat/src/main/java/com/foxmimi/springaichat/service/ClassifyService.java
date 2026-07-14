@@ -1,7 +1,7 @@
 package com.foxmimi.springaichat.service;
 
-import com.foxmimi.springaichat.model.ChatResponse;
-import com.foxmimi.springaichat.model.RenderedPrompt;
+import com.foxmimi.springaichat.model.domain.RenderedPrompt;
+import com.foxmimi.springaichat.model.response.ChatResponse;
 import org.springframework.stereotype.Service;
 
 import java.util.List;

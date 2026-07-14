@@ -1,5 +1,7 @@
 package com.foxmimi.springaichat.exception;
 
+import com.foxmimi.springaichat.handler.GlobalExceptionHandler;
+
 /**
  * 上游服务响应异常
  * <p>

@@ -1,5 +1,7 @@
 package com.foxmimi.springaichat.exception;
 
+import com.foxmimi.springaichat.handler.GlobalExceptionHandler;
+
 /**
  * Prompt 变量超长异常
  * <p>

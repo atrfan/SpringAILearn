@@ -1,5 +1,7 @@
 package com.foxmimi.springaichat.exception;
 
+import com.foxmimi.springaichat.handler.GlobalExceptionHandler;
+
 /**
  * 抽取重试耗尽异常
  * <p>

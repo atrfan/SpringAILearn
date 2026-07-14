@@ -2,10 +2,10 @@ package com.foxmimi.springaichat.service;
 
 import com.foxmimi.springaichat.exception.ExtractBusinessException;
 import com.foxmimi.springaichat.exception.ExtractRetryExhaustedException;
-import com.foxmimi.springaichat.model.ChatResponse;
-import com.foxmimi.springaichat.model.ExtractResponse;
-import com.foxmimi.springaichat.model.ExtractResult;
-import com.foxmimi.springaichat.model.RenderedPrompt;
+import com.foxmimi.springaichat.model.domain.ExtractResult;
+import com.foxmimi.springaichat.model.domain.RenderedPrompt;
+import com.foxmimi.springaichat.model.response.ChatResponse;
+import com.foxmimi.springaichat.model.response.ExtractResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.converter.BeanOutputConverter;
 import org.springframework.stereotype.Service;

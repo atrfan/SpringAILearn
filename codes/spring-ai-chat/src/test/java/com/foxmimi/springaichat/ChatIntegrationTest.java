@@ -1,8 +1,8 @@
 package com.foxmimi.springaichat;
 
-import com.foxmimi.springaichat.model.ChatRequest;
-import com.foxmimi.springaichat.model.ChatResponse;
-import com.foxmimi.springaichat.model.ErrorResponse;
+import com.foxmimi.springaichat.model.request.ChatRequest;
+import com.foxmimi.springaichat.model.response.ChatResponse;
+import com.foxmimi.springaichat.model.response.ErrorResponse;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;

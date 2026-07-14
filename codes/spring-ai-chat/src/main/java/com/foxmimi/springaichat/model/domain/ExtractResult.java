@@ -1,4 +1,4 @@
-package com.foxmimi.springaichat.model;
+package com.foxmimi.springaichat.model.domain;
 
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;

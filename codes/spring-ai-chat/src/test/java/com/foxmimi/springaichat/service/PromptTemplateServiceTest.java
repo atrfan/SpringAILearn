@@ -2,8 +2,8 @@ package com.foxmimi.springaichat.service;
 
 import com.foxmimi.springaichat.exception.PromptInputTooLongException;
 import com.foxmimi.springaichat.exception.PromptTemplateException;
-import com.foxmimi.springaichat.model.PromptSummary;
-import com.foxmimi.springaichat.model.RenderedPrompt;
+import com.foxmimi.springaichat.model.domain.RenderedPrompt;
+import com.foxmimi.springaichat.model.response.PromptSummary;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
