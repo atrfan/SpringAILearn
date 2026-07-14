@@ -6,7 +6,7 @@
 >
 > **文档定位：** 记录结构化输出的核心概念（Record / JSON Schema / Bean Validation 的分工、三类错误框架、失败处理链），并沉淀本周的关键设计决定（"未提及"映射、错误码方案、重试上限）。本周把 `/api/extract` 从 JSON 文本透传升级为经解析与校验的 Java 对象，并以 30+ 案例验收报告收口阶段项目一。
 >
-> **当前进度：** Day24 完成——`ExtractResult` 加上语义层校验注解，`ExtractService` 落地格式/语义/业务三层校验，`GlobalExceptionHandler` 新增三个可区分错误码（`EXTRACT_FORMAT_ERROR`/`EXTRACT_SEMANTIC_ERROR`/`EXTRACT_BUSINESS_ERROR`），业务错误与语义错误均经真实调用验证；格式错误路径留给 Day26 离线测试验证。（Day22 概念框架的第 1、3、4 节留待补写。）
+> **当前进度：** Day25 完成——`ExtractService` 加上格式/语义错误的有限重试（修复提示拼进 user，总共最多 3 次调用），业务错误保持不重试直接短路；新增 `ExtractRetryExhaustedException`/`EXTRACT_RETRY_EXHAUSTED`（502）覆盖重试耗尽场景。正常一次成功、业务错误不重试两条经真实调用验证；语义错误重试成功、重试耗尽两条因模型抽取过于准确未能复现，格式错误路径同样未复现，三者留给 Day26 离线测试验证。（Day22 概念框架的第 1、3、4 节留待补写。）
 
 第三周的技术债务第 1 条指出：抽取结果仅做 JSON 文本透传，服务端不解析、不校验。本周的核心主题是**输出可信**——"看起来像 JSON 的文本"不等于机器可消费的结果，下游需要的是形状确定、内容经过校验的对象。这也是对 Day19 注入结论（"可靠防线是输出侧收敛与校验"）在抽取端点上的落地。
 
@@ -137,15 +137,17 @@ public record ExtractResult(
 | 格式错误（解析异常） | `EXTRACT_FORMAT_ERROR` | 502 | 输出非法 JSON / 缺字段 / 错类型 |
 | 语义错误（Bean Validation 违例） | `EXTRACT_SEMANTIC_ERROR` | 502 | 字段内容不合理 |
 | 业务校验错误（自定义校验器违例） | `EXTRACT_BUSINESS_ERROR` | 502 | 返回的 json 字段中全为 null |
-| 重试耗尽（无法可靠解析） | 【待填】 | 【待填】 | 达到重试上限仍未通过解析与校验 |
+| 重试耗尽（无法可靠解析） | `EXTRACT_RETRY_EXHAUSTED` | 502 | 达到重试上限仍未通过解析与校验 |
 
 <!-- 命名风格与项目里已有错误码保持一致；HTTP 状态想清楚"是调用方的错还是模型/服务端的错"。 -->
 
 ### 5.3 重试上限与失败样本记录形式
 
-- **重试上限：** 【待填一个数字，计划建议 2 次，即最多 3 次调用】
-- **失败样本记录形式：** 【待填：结构化日志 or 落地文件；每条至少含原始输出、失败原因、错误类别、重试轮次】
-- **可观测性约定：** 【待填：响应元信息或日志中如何暴露本次实际重试次数】
+- **重试范围：** 只有格式错误（解析失败）和语义错误（Bean Validation 违例）进入重试循环——这两类是"模型这次没输出对"，换一轮调用/带上修复提示有机会纠正。业务错误（三字段全空）不重试——这属于"输入文本本身与报销场景无关"，重试也大概率仍是空，直接短路返回 `EXTRACT_BUSINESS_ERROR`。
+- **修复提示：** 把上一轮失败原因拼进下一轮的 **user** 文本（而非 system），让模型看到自己上次错在哪。
+- **重试上限：** 总共最多 3 次调用（初次 + 最多 2 次重试）。
+- **失败样本记录形式：** 循环内部每次失败直接用 `LOGGER.error` 记（不新增字段、不落地文件），记录本轮的错误类别与重试轮次；最终重试耗尽才对外抛 `EXTRACT_RETRY_EXHAUSTED`，返回给前端。
+- **可观测性约定：** 不在 `ExtractResponse` 加字段，重试次数只体现在日志里。
 
 ### 5.4 字段间业务约束（Day24 落地）
 
@@ -207,6 +209,28 @@ public record ExtractResult(
   - 一度把三个异常合并进一个 `@ExceptionHandler` 共用 `EXTRACT_ERROR` 一个错误码，违反了"可区分错误码"的验收标准，拆回三个独立 handler；
   - 原始模型响应内容不能直接拼进异常 `message`（会被 Handler 透给客户端），但 Service 层按项目既有约定不该打日志——最终方案是给异常类加独立的 `rawContent` 字段，`getMessage()` 只给客户端安全文案，日志统一收到 `GlobalExceptionHandler` 里用 `getRawContent()` 打印。
 - 明日调整：进入 Day25，有限重试 + 修复提示 + 失败样本记录；重试耗尽降级为独立错误码（不透传原始文本）；重试次数需可观测。
+
+### 2026-07-14（Day25）
+
+- 实际投入：
+- 今日目标：给格式错误、语义错误加有限重试 + 修复提示，业务错误保持不重试；重试耗尽返回独立错误码
+- 完成内容：
+  - 补 5.2（重试耗尽错误码 `EXTRACT_RETRY_EXHAUSTED`，502）、5.3（重试范围只含格式/语义两类、修复提示拼进 user、重试上限总共 3 次调用、失败样本用 `LOGGER.error` 记在循环内部、不额外加可观测性字段）两处设计决定；
+  - `ExtractService.extract()` 改造为重试循环：每轮重新调用模型 → 格式/语义失败则把失败原因拼进下一轮 user 文本、`continue`；业务规则违反（三字段全空）不重试、直接抛异常跳出循环；三者都通过则标记 `success = true` 并 `break`；
+  - 循环跑满 3 次仍未成功（`success` 为 `false`）时，抛新建的 `ExtractRetryExhaustedException`；
+  - `GlobalExceptionHandler` 新增 handler，映射 502 + `EXTRACT_RETRY_EXHAUSTED`；
+  - 清理：改造后 `ExtractFormatException`/`ExtractSemanticException` 不再被 `ExtractService` 直接抛出，移除了这两个已用不上的 import 与对应的注释死代码。
+- 产出路径：`service/ExtractService.java`、`exception/ExtractRetryExhaustedException.java`、`exception/GlobalExceptionHandler.java`、`notes/week04.md`
+- 测试或实验结果：`mvnw compile` 通过；手动调用 `/api/extract` 验证——
+  - 正常一次成功（齐全样本）：符合预期，未触发任何重试分支；
+  - 业务错误（三字段全空）：符合预期，不进重试循环，直接返回 `EXTRACT_BUSINESS_ERROR`；
+  - 语义错误重试后修复成功、重试耗尽（`EXTRACT_RETRY_EXHAUSTED`）：均未能复现——模型对测试样本的抽取一直很准确，没能稳定触发语义/格式失败，同格式错误一样留给 Day26 离线测试用伪造字符串直接验证。
+- 遇到的问题：
+  - 第一版格式错误分支 catch 住异常后忘了 `continue`，会带着上一轮的脏 `result`（甚至是 `null`）往下走到语义校验，`validator.validate(null)` 直接抛未处理的 `IllegalArgumentException`，而不是进入重试；
+  - 修复提示一度被拼进了 system 而不是设计决定里定的 user；
+  - `ExtractRetryExhaustedException`/`GlobalExceptionHandler` 的 handler 都先写好了，但一开始没有任何地方真正抛出这个异常——循环耗尽后会直接带着不合法的 `result` 走到 `return`，需要额外一个 `success` 标志位来区分"循环是靠 break 提前退出成功的，还是 3 次跑完仍未成功"；
+  - `ExtractRetryExhaustedException` 的 Javadoc 最初是从 `ExtractBusinessException` 复制的，描述对不上，已改正。
+- 明日调整：进入 Day26，20–22 条离线参数化测试，覆盖缺字段/错类型/非法值/超长/业务违例/正常样本五类；重点补上今天真实调用没能复现的三条路径（格式错误、语义错误重试成功、重试耗尽）；默认 `mvn test` 零 API 调用。
 
 ## 本周思考题（Day28 回答）
 

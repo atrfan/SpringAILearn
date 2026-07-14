@@ -135,6 +135,12 @@ public class GlobalExceptionHandler {
         return error(HttpStatus.BAD_GATEWAY, "EXTRACT_BUSINESS_ERROR", exception.getMessage());
     }
 
+    @ExceptionHandler(ExtractRetryExhaustedException.class)
+    ResponseEntity<ErrorResponse> handleExtractRetryExhaustedException(ExtractRetryExhaustedException exception) {
+        LOGGER.error("抽取结果多次尝试仍未产出有效信息，原始响应内容: {}", exception.getRawContent());
+        return error(HttpStatus.BAD_GATEWAY, "EXTRACT_RETRY_EXHAUSTED", exception.getMessage());
+    }
+
     /**
      * 构建统一格式的错误响应
      *
