@@ -9,7 +9,7 @@ import com.foxmimi.springaichat.model.response.ExtractResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.converter.BeanOutputConverter;
 import org.springframework.stereotype.Service;
-import tools.jackson.core.exc.StreamReadException;
+import tools.jackson.core.JacksonException;
 import jakarta.validation.Validator;
 
 import java.util.Map;
@@ -45,8 +45,8 @@ public class ExtractService {
             tryCount ++;
             try {
                 result = converter.convert(raw.content());
-            } catch (StreamReadException e) {
-                log.error("AI 模型返回的抽取结果无法解析为 JSON，尝试重新调用模型进行抽取，当前尝试次数：{}", tryCount);
+            } catch (JacksonException e) {
+                log.error("AI 模型返回的抽取结果无法解析为 JSON 或字段类型不匹配，尝试重新调用模型进行抽取，当前尝试次数：{}", tryCount);
                 withSchema = new RenderedPrompt(base.templateId(), base.version(), base.model(), systemWithSchema, withSchema.user() + "\n 上次输出的不是合法的JSON，请确保输出正确");
                 continue;
             }
