@@ -68,6 +68,18 @@
 
 **Day32 落地提示：** 该拒绝逻辑接进 `GlobalExceptionHandler`，复用 `ErrorResponse` 结构与既有错误码风格；错误应结构化，不返回堆栈。
 
+### 决定 5：clear 能力用 `DELETE` 端点暴露（Day32）
+
+**决定：** 新增 `DELETE /api/conversation/{conversationId}` 结束/重置一条会话，成功返回 **204 No Content**；`ConversationService.clear(id)` 委托 `ChatMemory.clear(id)`。
+
+**为什么 DELETE 而非 POST 动作式：** clear 的语义就是"删除这条会话的服务端记忆资源"，`DELETE + 资源 id` 是最贴的 REST 表达；且 clear 天然**幂等**（清一个不存在的 id 也不报错），正对上 DELETE 的幂等语义。`POST /{id}/clear` 是动作式命名，语义不如 DELETE 直接，本项目不采用。
+
+**正确性地基（Day30 同款坑的复用）：** clear 注入的 `ChatMemory` **必须与 `conversationChatClient` 上 advisor 读写的是同一个 bean**——全局只有一个 `chatMemory` bean，注入无歧义，故 clear 清的正是 chat 端点用的那份记忆。若注入成另一个 bean，clear 会清一份空记忆、**静默失效**（同 Day30 `@Qualifier` 拼错踩的坑）。
+
+**边界立场与决定 4 一致：** clear 端点同样对空白 `conversationId` 拒绝（400），**复用** Day30 已验证的 `IllegalArgumentException → 400` 异常链，不为 clear 单开一套。
+
+**为什么最小化、不做更多：** 计划要求"按需求最小化"。本周只需"结束会话"这一个动作，不做"列出所有会话""重命名"等——那些属于**业务持久化层**（给人看的会话管理），不是 `ChatMemory`（给模型看的上下文）该管的，混进来就越界了（呼应本周开篇 ChatMemory vs 业务持久化的边界）。
+
 ## ChatMemory 与 Advisor 的协作机制（对照 Spring AI 官方文档）
 
 > 参考：[Chat Memory](https://docs.spring.io/spring-ai/reference/api/chat-memory.html)、[Advisors](https://docs.spring.io/spring-ai/reference/api/advisors.html)。本节解释"记忆为什么不用手工拼、advisor 到底替我们做了什么"，是决定 3、以及 Day30 实测 token 37→62 的原理。
@@ -216,6 +228,22 @@ chatClient.prompt().advisors(a -> a.param(ChatMemory.CONVERSATION_ID, id))...
 - 测试或实验结果：`mvn test -Dtest=MessageWindowChatMemoryObservationTest` → Tests run: 3, Failures: 0，BUILD SUCCESS，零 API 调用。核心结论：**决定 2 的 `maxMessages=12` 在真实 2.0.0 实测稳定保留 5 轮，成立**；总数是 11 不是 12，因 **system 占 1 坑 + 对齐不留半轮**，第 12 个坑稳态下必然空着。
 - 遇到的问题：无阻塞。附带收获：纯从"5 轮 vs 应有 6 轮"的算术**独立复验了"system 占坑不被逐"**，不用读源码——比决定 2 当初读 `main` 分支源码那次证据更硬。
 - 明日调整：进 Day32——`clear` 会话、空历史首轮、`conversationId` 边界处理（决定 4 接进 `GlobalExceptionHandler`）。advisor 答话时序（临界轮可见 4 还是 5 轮）留到 Day34 真实调用时验证。
+
+### 2026-07-22（Day32）
+
+- 实际投入：
+- 今日目标：会话生命周期——`clear` 能力落地 + `conversationId` 边界处理收口。
+- 完成内容（核对后发现决定 4 的边界处理 Day30 已落地，本日真正增量只有 `clear` 能力）：
+  - **现状核对**：`conversationId` 缺失/空白拒绝 + 400 映射，Day30 已在 `ConversationController`（`StringUtils.hasText`）+ `GlobalExceptionHandler`（`IllegalArgumentException → 400 INVALID_REQUEST`）完成，本日不重复造；
+  - **新增 clear 能力（决定 5）**：`ConversationService.clear(id)` 委托 `ChatMemory.clear(id)`（构造器多注入同一个 `chatMemory` bean）；`ConversationController` 加 `DELETE /api/conversation/{conversationId}` → 204，空白 id 复用 400 异常链；
+  - `mvnw compile` BUILD SUCCESS。
+- 产出路径：`service/ConversationService.java`、`controller/ConversationController.java`、`notes/week05.md`（决定 5 + 本记录）。
+- 测试或实验结果（本轮零 API）：
+  - clear **记忆层清空**：Day31 观察 C 已铁证 `clear(A)`→`get(A)` 空、不影响 B；`clear()` 即直接委托 `chatMemory.clear()`，机制已成立；
+  - clear 端点**边界 400**：复用 Day30 已验证的同一条 `IllegalArgumentException → 400` 链；自动化断言并入 Day33（计划本就含"边界与 clear"离线用例）；
+  - clear **端到端"真实不记得"**：并入 Day34（端到端日），本轮不花 API。
+- 遇到的问题：无。附带确认——边界处理不必重写，Day30 已达标，避免了重复造轮子。
+- 明日调整：进 Day33——离线单元测试 10-12 条，含 `clear` 后 `get` 为空、空历史 `get` 不报错、缺失/非法 id 行为（正好把本日 clear 的自动化断言补上）。
 
 ## 参考资料
 

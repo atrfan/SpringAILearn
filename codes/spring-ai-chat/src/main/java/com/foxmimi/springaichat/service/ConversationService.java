@@ -24,8 +24,11 @@ public class ConversationService {
 
     private final ChatClient chatClient;
 
-    public ConversationService(@Qualifier("conversationChatClient") ChatClient chatClient) {
+    private final ChatMemory chatMemory;
+
+    public ConversationService(@Qualifier("conversationChatClient") ChatClient chatClient, ChatMemory chatMemory) {
         this.chatClient = chatClient;
+        this.chatMemory = chatMemory;
     }
 
 
@@ -64,6 +67,19 @@ public class ConversationService {
                 totalTokensOf(springAiResponse.getMetadata()),
                 elapsedMillis
         );
+    }
+
+    /**
+     * 清除指定会话的历史记忆，用于结束或重置一条会话。
+     * <p>
+     * 直接委托 {@link ChatMemory#clear(String)}。注入的 {@link ChatMemory} 与
+     * {@code conversationChatClient} 上 advisor 读写的是同一个 bean（全局仅此一个），
+     * 因此清除的正是 {@code /api/conversation} 端点使用的那份记忆。
+     * 操作幂等：清除一个从未出现过的 conversationId 也不会报错。
+     * </p>
+     */
+    public void clear(String conversationId) {
+        chatMemory.clear(conversationId);
     }
 
     /**
