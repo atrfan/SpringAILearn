@@ -40,7 +40,7 @@
 
 **关键认知纠错：** 曾假设"system 单独保留、不占额度"，抠 `MessageWindowChatMemory.process()` 逐字源码后确认**反了**——`cutIndex = processedMessages.size()(含 system) - maxMessages`，即总数封顶、system 占坑，只是永不被删。第一次抓文档给的"不占额度、5+20=25"结论是错的，靠核实到源码才没把错传下去。
 
-**诚实边界（Day30 需实测）：** `process()` 裁剪逻辑已定论；但"答话瞬间可见几轮"还取决于 `MessageChatMemoryAdvisor` 先存 user 还是先取历史的调用时序，这部分**未**核实到源码。故 12 是"下限 11 + 一坑保险"，真实轮数留到 Day30 接线时用真实对话数一遍确认。注：核实用的是 `main` 分支源码，需复核 2.0.0 是否一致。
+**诚实边界（Day31 对象层坐实，advisor 时序仍待 Day34）：** `MessageWindowChatMemory` 的对象层裁剪已在**真实 2.0.0** 实测坐实——`maxMessages=12` + 1 条 system **稳定保留最近 5 轮**（见 Day31 记录：加 8 轮后 `get` 出 `1 system + U4A4…U8A8` = 11 条，USER 计数 = 5），并靠"应有 6 轮却只剩 5 轮"的算术**独立复验了 system 占坑不被逐**——纯行为实测、不依赖读源码，比当初核实 `main` 分支源码那次证据更硬。仍未直接验证的是 `MessageChatMemoryAdvisor` 答话那一刻"先存本轮 user、再取历史"的调用时序：它会在裁剪临界点让窗口多一条"半轮"的 user，可能使某一轮答话瞬间实际可见 4 轮而非 5 轮。离线实测用的是"整轮 add"，复现不了这个 user 先入的时序，故这一层留到 **Day34 真实调用**时在临界轮观察。结论：对象层保留数已定论（稳态 5 轮）；临界时序的 ±1 轮是 Day34 的验证点。
 
 ### 决定 3：方式 B——建独立的 `conversationChatClient` bean 承载记忆
 
@@ -146,6 +146,28 @@ chatClient.prompt().advisors(a -> a.param(ChatMemory.CONVERSATION_ID, id))...
 
 本项目按决定 3 选了 B——独立 `conversationChatClient` bean + `defaultAdvisors`，隔离写在装配层。
 
+## 历史窗口裁剪策略：按条数 vs 按 token（Day31 准备事项 3）
+
+> 承接决定 2（`maxMessages=12` 的条数窗口）：既然选了按条数，就得说清它相对按 token 裁剪的取舍与盲区，才不算"用默认值再说"。
+
+| 维度 | 按条数（`MessageWindowChatMemory` 的做法） | 按 token 数 |
+| --- | --- | --- |
+| 计量单位 | 消息条数（一轮问答 = user + assistant = 2 条） | 累计 token 数 |
+| 事前可预测性 | **高**——"稳定保留 N 轮"是可承诺的（Day31 实测 12 → 5 轮，每次一样） | **低**——保留轮数随每轮长短浮动，同预算这次留 8 轮、下次可能只留 3 轮 |
+| 实现成本 | 低——只数个数；且 Spring AI 默认实现天生按条数，零额外成本 | 高——每条先过 tokenizer 算 token，还依赖具体 tokenizer |
+| 贴合模型硬约束 | 差——条数只是 token 的**代理指标**，会失真 | 好——精确贴着 token 上限与成本这条真正的硬线 |
+| 主要盲区 | 一条**超长消息**可单条撑爆上下文，窗口只数"才几条"、毫无察觉 | 保留轮数不可预测；计数还依赖具体 tokenizer |
+
+**先厘清一个易被挑刺的点：** token 不是"算不准"。对一段确定的文本，token 数是**确定的**（同一 tokenizer、同一段字，结果固定）。真正不可预测的是**事前不知道模型这轮会吐多少 token**（思考多长、格式多啰嗦、答多详细都不定），于是"这轮吃掉多少 token 预算"事前无法预测；而条数事前铁定（一轮就是 2 条）。所以按 token 的软肋落在**裁剪边界的可预测性**上——不是计数失真，是**保留轮数不稳定**。
+
+**两边的盲区都要认：**
+- **按条数的盲区**：条数只是 token 的代理，代理会失真——一条超长消息（用户粘一大段文本）可能单条就撑爆模型上下文，而条数窗口只数"没超几条"，对 token 早已爆掉毫无察觉。
+- **按 token 的存在理由**：模型真正的硬约束是 **token 上限**（超了截断 / 报错）与**成本**（按 token 计费），token 裁剪精确贴着这条硬线，条数贴不住。
+
+**本周为什么先用按条数：** 内存版学习环境，消息都不长（单条撑爆的盲区暂不成立），且本周要的正是"稳定保留最近 5 轮"这种**可预测**行为——按条数直接满足，还顺着 Spring AI 默认实现零成本落地。按 token 精确，但换来轮数不可预测 + 计算开销，当下不划算。故**按条数是当下正解，按 token 列技术债**，留到"消息可能超长"的真实场景（如接入长文档、RAG 上下文）再上。
+
+> **一句话：** 条数简单、可预测，但对超长单条失真；token 精确贴合硬约束，但保留轮数不可预测、还要先算 token。选型跟着"当下最痛的约束"走——本周痛的是"稳定保留几轮"，不是"token 会不会爆"，所以选条数。
+
 ## 每日记录
 
 ### 2026-07-16（Day29）
@@ -180,6 +202,20 @@ chatClient.prompt().advisors(a -> a.param(ChatMemory.CONVERSATION_ID, id))...
   5. 漏 `.system(...)`——而决定 2 的 `maxMessages=12` 正是按"有 1 条 system 占坑"算的；
   6. 类名 `Conservation`（拼写）、端点 `/chat` 与 `ChatController` 撞车（启动 `Ambiguous mapping`）；改类名 + 路径 `/api/conversation`。
 - 明日调整：进 Day31，深化会话隔离 + 历史窗口裁剪实测——正好真实验证决定 2 的 `maxMessages=12` 到底稳定保留几轮（呼应决定 2 留下的"Day30/31 需实测"边界）。
+
+### 2026-07-22（Day31）
+
+- 实际投入：
+- 今日目标：验证多会话隔离；离线观察窗口裁剪行为，实测决定 2 的 `maxMessages=12` 到底稳定保留几轮。
+- 完成内容（①②③均落地；"模型是否还记得早期信息"的真实调用按计划留 Day34）：
+  - 新增离线观察测试 `MessageWindowChatMemoryObservationTest`（3 条，零 API）：直接对真实 `MessageWindowChatMemory` 操作，逐轮打印窗口内容，只对铁定不变量断言（总数≤上限、system 恒在且唯一、会话互不串、`clear` 只清自己）；
+  - **观察 A**（`maxMessages=4`）：稳定保留 `system + 最近 1 轮`；逐出时**整轮一起丢**、system 恒在最前；
+  - **观察 B**（`maxMessages=12`，生产值）：加 8 轮后窗口 = `1 system + U4A4…U8A8` = 11 条，**USER 计数 = 5**；
+  - **观察 C**：两个 `conversationId` 互不可见，`clear(A)` 后 A 空、B 完好。
+- 产出路径：`codes/spring-ai-chat/src/test/java/com/foxmimi/springaichat/memory/MessageWindowChatMemoryObservationTest.java`；`notes/week05.md`（新增"按条数 vs 按 token"对比一节 + 本记录 + 决定 2 诚实边界更新）。
+- 测试或实验结果：`mvn test -Dtest=MessageWindowChatMemoryObservationTest` → Tests run: 3, Failures: 0，BUILD SUCCESS，零 API 调用。核心结论：**决定 2 的 `maxMessages=12` 在真实 2.0.0 实测稳定保留 5 轮，成立**；总数是 11 不是 12，因 **system 占 1 坑 + 对齐不留半轮**，第 12 个坑稳态下必然空着。
+- 遇到的问题：无阻塞。附带收获：纯从"5 轮 vs 应有 6 轮"的算术**独立复验了"system 占坑不被逐"**，不用读源码——比决定 2 当初读 `main` 分支源码那次证据更硬。
+- 明日调整：进 Day32——`clear` 会话、空历史首轮、`conversationId` 边界处理（决定 4 接进 `GlobalExceptionHandler`）。advisor 答话时序（临界轮可见 4 还是 5 轮）留到 Day34 真实调用时验证。
 
 ## 参考资料
 
