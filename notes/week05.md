@@ -245,6 +245,24 @@ chatClient.prompt().advisors(a -> a.param(ChatMemory.CONVERSATION_ID, id))...
 - 遇到的问题：无。附带确认——边界处理不必重写，Day30 已达标，避免了重复造轮子。
 - 明日调整：进 Day33——离线单元测试 10-12 条，含 `clear` 后 `get` 为空、空历史 `get` 不报错、缺失/非法 id 行为（正好把本日 clear 的自动化断言补上）。
 
+### 2026-07-23（Day33）
+
+- 实际投入：
+- 今日目标：离线**断言式**单元测试 10–12 条，覆盖存取/隔离/裁剪/边界四类，默认 `mvn test` 零 API。
+- 完成内容：
+  - 新增 `MessageWindowChatMemoryUnitTest`（12 条，`@Nested` 分四类），直接对真实 `MessageWindowChatMemory` + 默认内存仓库断言，无 `@Tag("integration")`，默认即跑；
+  - 与 Day31 观察测试**分工而非重复**：Day31 是观察式（打印 + 只断言铁定不变量、故意不硬断言几轮），本日是断言式（对四类行为硬断言），Day31 原样保留不动；
+  - **历史存取（3）**：add 后原样取回、多轮保持写入顺序、按 `conversationId` 各取各的线；
+  - **会话隔离（3）**：两 id 内容双向互不可见、`clear(A)` 不影响 B、8 线程并发写不同 id 互不干扰；
+  - **窗口裁剪（3）**：超 `maxMessages` 逐出最旧、system 占坑但永不被逐且恒在最前、恰好等于窗口不裁；
+  - **边界与 clear（3）**：未知 id 空历史 `get` 返回空列表不报错、`clear` 后 `get` 为空、空白/null id 抛 `IllegalArgumentException` 而非 UUID 串被正常接受。
+- 产出路径：`codes/spring-ai-chat/src/test/java/com/foxmimi/springaichat/memory/MessageWindowChatMemoryUnitTest.java`；`notes/week05.md`（本记录）。
+- 测试或实验结果：`mvn test -Dtest=MessageWindowChatMemoryUnitTest` → surefire XML `tests="12" failures="0" errors="0" skipped="0"`，零 API。关键坐实：
+  - **决定 4 的机制来源被单测坐实**——`add`/`get`/`clear` 三个方法开头均 `Assert.hasText(conversationId)`，空白/null 一律抛 `IllegalArgumentException`；这正是 advisor 缺 `CONVERSATION_ID` 抛错、最终映射 400 的底层原因。`"not-a-uuid"` 被正常接受（返回空），印证「只校非空白、不强校 UUID 格式」；
+  - **并发用例的诚实边界**：只验证了「不同 id 并发写互不干扰」（底层 `ConcurrentHashMap` 对不同 key 安全），**未**验证「同一 id 并发写的原子性」——那是更强命题，本用例不覆盖，不过度解读。
+- 遇到的问题：`@Nested` 的 surefire 怪癖——纯文本 `...UnitTest.txt` 摘要显示 `Tests run: 0`（外层类无直接 `@Test`），但 XML 正确计 `tests="12"`。**取证以 XML 为准**，别被控制台那行 0 误判成没跑用例。取舍：若在意控制台读数，可把 `@Nested` 拆成扁平四类命名，代价是牺牲分组可读性——本日选保留 `@Nested`。
+- 明日调整：进 Day34——端到端多轮用例 5–6 条（真实调模型），观察 `promptTokens` 随历史增长的成本，并在临界轮验证 advisor「先存本轮 user、再取历史」的时序（决定 2 留到 Day34 的那个 ±1 轮验证点）。
+
 ## 参考资料
 
 - [Spring AI Chat Memory](https://docs.spring.io/spring-ai/reference/api/chat-memory.html)
