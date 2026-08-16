@@ -223,6 +223,38 @@ public WeatherViewDto getWeather(String city) {
 - 遇到的问题：无阻塞。**双重验证点一次通过**：v4-flash tool calling 端到端走通（模型决策 → 填参 → 应用执行 → 结果回喂 → 最终生成五阶段闭环），CMA 三头（Referer / User-Agent / Accept）绕 WAF 放行，双层成功校验（Content-Type 含 json + `code===0`）正常
 - 明日调整：进 Day38——新增 `ClockService`（`@Tool(description="获取当前时间")`，纯 Java 不调下游，与 `WeatherService` 同构），`toolChatClient.defaultTools` 追加 `clockService`，多工具决策观察 3–5 次（选对 / 跨工具串行并行 / 不该调 / 参数缺失）并记录
 
+### 2026-08-16（Day38）
+
+> 实际执行日期为 2026-08-16，较原计划日历（7/25）滞后三周；原计划中"OrderClient + WireMock"部分已随范围变更砍掉，本节以实际执行为准。
+
+- 实际投入：
+- 今日目标：多工具编排与决策观察——新增 `ClockService` 纯本地工具、`toolChatClient` 挂两个工具、观察模型在天气/时间工具间的决策行为（选对 / 串行并行 / 不该调 / 参数缺失）
+- 完成内容：
+  - **多工具装配（代码）**：新增 `ClockService`（`@Tool(description="获取当前时间")` 的 `getCurrentTime()`，纯 Java 不调下游，与 `WeatherService` 同构）；`OpenAIConfig.toolChatClient` 的 `defaultTools(weatherService)` → `defaultTools(weatherService, clockService)`——**不新建 bean、不碰 `chatClient` / `conversationChatClient`**，延续"client 级隔离"装配原则。
+  - **Code review（两轴）与修订**：
+    - Standards 轴：装配侧合规；`ClockService` 初版 **2 硬违规**（返回 `String` 违反决定 2"Record DTO 而非 String"；`@Tool` description 英文未写清）+ **2 软违规**（`@Component` 且无类 Javadoc、`log.info` 级别）+ 文档漂移（`toolChatClient` javadoc 未同步双工具）+ 格式笔误（`yyyy:MM:dd` 冒号分隔日期段，疑为 `yyyy-MM-dd` 笔误）+ **Primitive Obsession**（`String` 顶替"当前时间"领域概念，与硬违规同源）。
+    - Spec 轴：装配与决定 3 完全一致、无范围蔓延；唯一硬偏差是 description 语言；返回 `String` 判"**可接受解释**"（PRD R3 的"同构"限定于 `@Tool` 标注，时钟工具无消毒需求）——**两轴结论相反，用户决定采纳 Standards 轴：改 Record DTO 严格同构**。
+    - 修订后：返回 `CurrentTimeDto(date, time, timezone)` Record（新增 `tool/dto/CurrentTimeDto.java`）；`@Service` + 类 Javadoc；`log.debug`；`java.time`（`LocalDateTime` + `DateTimeFormatter`，格式 `yyyy-MM-dd` / `HH:mm:ss`）；description 中文"获取当前时间"。
+  - **日志配置修复**：`application.yaml` 里 `com.foxmimi.springaidemo: DEBUG` 是早期 demo 残留包名，实际代码全在 `com.foxmimi.springaichat`——**日志级别按 logger 名（类全限定名）精确匹配**，包名不匹配导致 DEBUG 永不生效、控制台只剩 INFO；改为 `com.foxmimi.springaichat: DEBUG`。
+  - **真实调用观察（已完成 2 次）**：
+    - ① "现在时间是多少"（修复前，返回 String）：模型正确选中 `ClockService`（不调天气）→ 答"当前时间是 2026年8月16日 16:05:25"；`promptTokens=530 / completion=19 / total=549 / 2553ms`；控制台确认方法被调用（此时日志还是 INFO）。
+    - ② "现在时间是多少"（修复后，返回 Record DTO）：模型答"**2026年8月16日 16:12:11（北京时间，时区 Asia/Shanghai）**"——content 里出现时区字段，说明模型消费了 `CurrentTimeDto` 的**全部三个字段**；`promptTokens=534 / completion=28 / total=562 / 2344ms`。
+    - **观察：模型表述 ≠ 工具返回**——工具返回 `"time":"16:15:30"`（含秒），模型回复省略了秒、把 `Asia/Shanghai` 说成"北京时间"；跨 API 边界的是 **JSON 字段**（`{"date":..,"time":..,"timezone":..}`），模型"解析"的是 JSON 而非 Java 类型（`LocalDateTime`/Record 都不越过边界）。
+  - **为什么模型输出 ≠ 工具返回值（"没有秒"问题）**：
+    - **链路回顾**：工具返回 `CurrentTimeDto`（序列化成 JSON `{"date":"2026-08-16","time":"16:15:30","timezone":"Asia/Shanghai"}`）→ Spring AI 包成 `ToolResponseMessage` 回喂，作为**输入上下文** → 模型基于"用户问题 + 工具结果"**重新生成**一段自然语言回复。工具结果只是模型的输入，回复是模型的一次全新生成。
+    - **核心结论**：模型回复**不是工具结果的透传/复述**，而是基于它的再生成——模型可以引用、转述、概括、省略、补充，它没有义务原样复述 JSON 字段。
+    - **"没有秒"的直接原因**：模型做了**表述压缩**——它推断"秒"对普通用户不关键，按日常说话习惯只说到分钟（"下午4点15分"）。这是模型的意图推断/摘要行为，**不是数据丢失**（工具确实返回了秒，debug 日志 `调用了 ClockService.getCurrentTime() 方法: 2026-08-16T16:15:30` 可证）。
+    - **最有力的证据——回复同时被减损与增补**：减了秒（`16:15:30` → `16:15`），却增了"北京时间"（`timezone:"Asia/Shanghai"` 被转述成口语）与"下午4点15分"。一个方向丢信息、另一个方向加信息，正好证明它是**再生成**而非透传。
+    - **工程启示（与 Day39 消毒层同构，两个方向）**：消毒层讲"别靠 Prompt 让模型**别提**敏感字段"（不可靠）；这里同理"别靠模型自觉**复述**精确字段"（也不可靠）。对精度有硬要求的字段（时间戳、订单号、金额），应由**应用层**保证（模板拼接 / 结构化输出 / 提示词显式要求），不能假设模型会原样转述工具结果。
+    - **验证方法**：问模型"现在几点几分几秒"——它可能补出秒，也可能仍省略；无论哪种结果，都再次证明"工具返回什么"与"模型说什么"是两件事。
+  - **待补观察（3 次，implement.md 要求 3–5 次）**：③ 跨工具复合（"北京今天天气怎么样？现在几点？"）→ 串行 vs 并行；④ 不该调任何工具（"1+1等于几"）→ 不乱调；⑤ 参数缺失（"今天天气怎么样"没说城市）→ 追问 vs 瞎填参。
+- 产出路径：`tool/tool/ClockService.java`（修订）、`tool/dto/CurrentTimeDto.java`（新增）、`config/OpenAIConfig.java`（装配 + javadoc 同步）、`application.yaml`（日志包名修复）
+- 测试或实验结果：见上表；修复前后 token 对比：Record DTO 比 String 多 4 promptTokens（534 vs 530，三字段 JSON 序列化成本），`completionTokens` 多 9（模型多说了时区）——"结构化返回有极小成本，换来字段级消费"
+- 遇到的问题：
+  - 日志 DEBUG 不生效：包名 `springaidemo` 与 `springaichat` 不一致（logger 名精确匹配），已修复；
+  - git 暂存坑：`ClockService` 曾以**空骨架**（仅 package 声明 4 行）暂存、真实代码在工作区，直接 commit 会提交空类——需重新 `git add`（初版提交前差点踩中）。
+- 明日调整：进 Day39 安全面——`ApiKeyInterceptor`（`X-API-Key` 校验失败 401）+ `security.api-keys` 配置外化 + View DTO 消毒验证 + 间接提示注入样本 1–2 个；先补跑 Day38 剩余 3 次观察并补记。
+
 ## 参考资料
 
 - [Spring AI Tool Calling](https://docs.spring.io/spring-ai/reference/api/toolcalling.html)
