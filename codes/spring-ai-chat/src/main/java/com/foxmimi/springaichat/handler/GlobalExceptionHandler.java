@@ -8,6 +8,8 @@ import com.foxmimi.springaichat.exception.PromptInputTooLongException;
 import com.foxmimi.springaichat.exception.PromptTemplateException;
 import com.foxmimi.springaichat.exception.UpstreamResponseException;
 import com.foxmimi.springaichat.model.response.ErrorResponse;
+import com.foxmimi.springaichat.tool.exception.ToolExecutionException;
+import com.foxmimi.springaichat.tool.exception.ToolExecutionException.FailureCause;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.retry.*;
@@ -149,6 +151,33 @@ public class GlobalExceptionHandler {
     ResponseEntity<ErrorResponse> handleExtractRetryExhaustedException(ExtractRetryExhaustedException exception) {
         LOGGER.error("抽取结果多次尝试仍未产出有效信息，原始响应内容: {}", exception.getRawContent());
         return error(HttpStatus.BAD_GATEWAY, "EXTRACT_RETRY_EXHAUSTED", exception.getMessage());
+    }
+
+    /**
+     * 处理工具下游调用失败，按 {@link FailureCause} 分类映射（design.md §2.3 错误码表）
+     * <ul>
+     *   <li>{@link FailureCause#TIMEOUT} → 504 {@code TOOL_DOWNSTREAM_TIMEOUT}</li>
+     *   <li>{@link FailureCause#BLOCKED} → 502 {@code TOOL_DOWNSTREAM_BLOCKED}</li>
+     *   <li>{@link FailureCause#RATE_LIMITED} → 502 {@code TOOL_DOWNSTREAM_RATE_LIMITED}</li>
+     *   <li>{@link FailureCause#CLIENT_4XX} → 502 {@code TOOL_DOWNSTREAM_4XX}</li>
+     *   <li>{@link FailureCause#SERVER_5XX} → 502 {@code TOOL_DOWNSTREAM_5XX}</li>
+     *   <li>{@link FailureCause#NOT_JSON} → 502 {@code TOOL_DOWNSTREAM_NOT_JSON}</li>
+     *   <li>{@link FailureCause#BUSINESS_ERROR} → 502 {@code TOOL_DOWNSTREAM_BUSINESS_ERROR}</li>
+     * </ul>
+     */
+    @ExceptionHandler(ToolExecutionException.class)
+    ResponseEntity<ErrorResponse> handleToolExecutionException(ToolExecutionException exception) {
+        LOGGER.warn("工具下游调用失败: cause={}, message={}",
+                exception.getFailureCause(), exception.getMessage());
+        return switch (exception.getFailureCause()) {
+            case TIMEOUT -> error(HttpStatus.GATEWAY_TIMEOUT, "TOOL_DOWNSTREAM_TIMEOUT", "下游工具响应超时");
+            case BLOCKED -> error(HttpStatus.BAD_GATEWAY, "TOOL_DOWNSTREAM_BLOCKED", "下游工具请求被拦截");
+            case RATE_LIMITED -> error(HttpStatus.BAD_GATEWAY, "TOOL_DOWNSTREAM_RATE_LIMITED", "下游工具限流");
+            case CLIENT_4XX -> error(HttpStatus.BAD_GATEWAY, "TOOL_DOWNSTREAM_4XX", "下游工具 4xx 错误");
+            case SERVER_5XX -> error(HttpStatus.BAD_GATEWAY, "TOOL_DOWNSTREAM_5XX", "下游工具 5xx 错误");
+            case NOT_JSON -> error(HttpStatus.BAD_GATEWAY, "TOOL_DOWNSTREAM_NOT_JSON", "下游工具返回非 JSON");
+            case BUSINESS_ERROR -> error(HttpStatus.BAD_GATEWAY, "TOOL_DOWNSTREAM_BUSINESS_ERROR", "下游工具业务错误");
+        };
     }
 
     /**

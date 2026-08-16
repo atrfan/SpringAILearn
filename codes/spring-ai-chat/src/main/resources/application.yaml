@@ -8,7 +8,7 @@ spring:
       chat:
 #        model: deepseek-v4-pro
         temperature: 0.0
-        model: deepseek-chat
+        model: deepseek-v4-flash
 #    这里配置阿里云百炼的
 #    openai:
 #      base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
@@ -22,3 +22,11 @@ logging:
     com.foxmimi.springaidemo: DEBUG
 server:
   port: 8080
+# 工具下游配置（CMA 天气接口，外化，不硬编码）
+tool:
+  weather:
+    base-url: https://weather.cma.cn
+    # 读超时（毫秒）
+    timeout-ms: 5000
+    # 连接超时（毫秒）
+    connect-timeout-ms: 3000
