@@ -1,5 +1,6 @@
 package com.foxmimi.springaichat.config;
 
+import com.foxmimi.springaichat.tool.tool.ClockService;
 import com.foxmimi.springaichat.tool.tool.WeatherService;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
@@ -56,19 +57,21 @@ public class OpenAIConfig {
     /**
      * 工具调用 ChatClient（本周新增）
      * <p>
-     * 单轮工具问答（无状态），装配 {@link WeatherService} 工具供模型自主决策调用。
+     * 单轮工具问答（无状态），装配 {@link WeatherService} 与 {@link ClockService}
+     * 两个只读工具供模型自主决策调用。
      * 不带 advisor（记忆 + 工具融合走 {@code conversationChatClient}，Day40 接入），
      * 不动 {@code chatClient} / {@code chatMemory} / {@code conversationChatClient}。
      * </p>
      *
      * @param openAiChatModel Spring AI 自动配置的 OpenAI 聊天模型实例（与其它 bean 共享）
      * @param weatherService  天气工具服务（{@link Tool @Tool} 标注方法由 Spring AI 扫描为工具 Schema）
+     * @param clockService    时钟工具服务（{@link Tool @Tool} 标注方法由 Spring AI 扫描为工具 Schema）
      * @return 带工具的 ChatClient 实例
      */
     @Bean
-    public ChatClient toolChatClient(OpenAiChatModel openAiChatModel, WeatherService weatherService) {
+    public ChatClient toolChatClient(OpenAiChatModel openAiChatModel, WeatherService weatherService, ClockService clockService) {
         return ChatClient.builder(openAiChatModel)
-                .defaultTools(weatherService)
+                .defaultTools(weatherService, clockService)
                 .build();
     }
 }
