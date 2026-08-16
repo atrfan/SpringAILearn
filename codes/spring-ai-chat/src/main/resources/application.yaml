@@ -19,7 +19,7 @@ spring:
 logging:
   level:
     org.springframework.ai.chat.client.advisor: DEBUG
-    com.foxmimi.springaidemo: DEBUG
+    com.foxmimi.springaichat: DEBUG
 server:
   port: 8080
 # 工具下游配置（CMA 天气接口，外化，不硬编码）
