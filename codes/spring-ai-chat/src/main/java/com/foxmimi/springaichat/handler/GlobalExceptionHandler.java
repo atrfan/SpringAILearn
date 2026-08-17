@@ -10,6 +10,7 @@ import com.foxmimi.springaichat.exception.UpstreamResponseException;
 import com.foxmimi.springaichat.model.response.ErrorResponse;
 import com.foxmimi.springaichat.tool.exception.ToolExecutionException;
 import com.foxmimi.springaichat.tool.exception.ToolExecutionException.FailureCause;
+import com.foxmimi.springaichat.tool.exception.UnauthorizedException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.retry.*;
@@ -35,6 +36,11 @@ import java.time.Instant;
 public class GlobalExceptionHandler {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(GlobalExceptionHandler.class);
+
+    @ExceptionHandler(UnauthorizedException.class)
+    ResponseEntity<ErrorResponse> handleUnauthorized(UnauthorizedException exception) {
+        return error(HttpStatus.UNAUTHORIZED, "UNAUTHORIZED", exception.getMessage());
+    }
 
     @ExceptionHandler(AsyncRequestNotUsableException.class)
     void handleAsyncRequestNotUsable(AsyncRequestNotUsableException exception) {

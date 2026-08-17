@@ -30,3 +30,6 @@ tool:
     timeout-ms: 5000
     # 连接超时（毫秒）
     connect-timeout-ms: 3000
+
+security:
+  api-keys: ${TOOL_API_KEYS:}

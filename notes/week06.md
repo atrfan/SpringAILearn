@@ -231,14 +231,13 @@ public WeatherViewDto getWeather(String city) {
 - 今日目标：多工具编排与决策观察——新增 `ClockService` 纯本地工具、`toolChatClient` 挂两个工具、观察模型在天气/时间工具间的决策行为（选对 / 串行并行 / 不该调 / 参数缺失）
 - 完成内容：
   - **多工具装配（代码）**：新增 `ClockService`（`@Tool(description="获取当前时间")` 的 `getCurrentTime()`，纯 Java 不调下游，与 `WeatherService` 同构）；`OpenAIConfig.toolChatClient` 的 `defaultTools(weatherService)` → `defaultTools(weatherService, clockService)`——**不新建 bean、不碰 `chatClient` / `conversationChatClient`**，延续"client 级隔离"装配原则。
-  - **Code review（两轴）与修订**：
-    - Standards 轴：装配侧合规；`ClockService` 初版 **2 硬违规**（返回 `String` 违反决定 2"Record DTO 而非 String"；`@Tool` description 英文未写清）+ **2 软违规**（`@Component` 且无类 Javadoc、`log.info` 级别）+ 文档漂移（`toolChatClient` javadoc 未同步双工具）+ 格式笔误（`yyyy:MM:dd` 冒号分隔日期段，疑为 `yyyy-MM-dd` 笔误）+ **Primitive Obsession**（`String` 顶替"当前时间"领域概念，与硬违规同源）。
-    - Spec 轴：装配与决定 3 完全一致、无范围蔓延；唯一硬偏差是 description 语言；返回 `String` 判"**可接受解释**"（PRD R3 的"同构"限定于 `@Tool` 标注，时钟工具无消毒需求）——**两轴结论相反，用户决定采纳 Standards 轴：改 Record DTO 严格同构**。
-    - 修订后：返回 `CurrentTimeDto(date, time, timezone)` Record（新增 `tool/dto/CurrentTimeDto.java`）；`@Service` + 类 Javadoc；`log.debug`；`java.time`（`LocalDateTime` + `DateTimeFormatter`，格式 `yyyy-MM-dd` / `HH:mm:ss`）；description 中文"获取当前时间"。
   - **日志配置修复**：`application.yaml` 里 `com.foxmimi.springaidemo: DEBUG` 是早期 demo 残留包名，实际代码全在 `com.foxmimi.springaichat`——**日志级别按 logger 名（类全限定名）精确匹配**，包名不匹配导致 DEBUG 永不生效、控制台只剩 INFO；改为 `com.foxmimi.springaichat: DEBUG`。
-  - **真实调用观察（已完成 2 次）**：
+  - **真实调用观察（已完成 5 次）**：
     - ① "现在时间是多少"（修复前，返回 String）：模型正确选中 `ClockService`（不调天气）→ 答"当前时间是 2026年8月16日 16:05:25"；`promptTokens=530 / completion=19 / total=549 / 2553ms`；控制台确认方法被调用（此时日志还是 INFO）。
     - ② "现在时间是多少"（修复后，返回 Record DTO）：模型答"**2026年8月16日 16:12:11（北京时间，时区 Asia/Shanghai）**"——content 里出现时区字段，说明模型消费了 `CurrentTimeDto` 的**全部三个字段**；`promptTokens=534 / completion=28 / total=562 / 2344ms`。
+    - ③ 跨工具复合问题"北京今天天气怎么样？现在几点？"：同一请求中同时触发 `WeatherClient` 与 `ClockService`。日志显示 `16:40:22.828` 完成北京城市搜索（`stationId=54511`），`16:40:22.889` 调用时钟工具，两个检查点相差约 61ms，且都位于 `nio-8080-exec-1` 请求线程。**只能确认应用日志中的天气在前、时钟在后，不能据此声称并行调用**；若要判断模型是否一次返回多个 tool calls，还需检查模型原始 tool-call 响应或 Spring AI 调试日志。
+    - ④ 不该调工具的问题"1+1 等于几？"：模型直接回答，日志确认天气与时钟工具均未调用，说明多工具 Schema 存在并不等于每次请求都必须调用工具。
+    - ⑤ 参数缺失问题"今天天气怎么样？"：模型没有虚构城市，而是回复"请问您想查询哪个城市的天气"并等待补参，行为属于**追问而非瞎填**；响应为 `promptTokens=655 / completionTokens=59 / totalTokens=714 / 2598ms`。回复同时主动给出当前时间 `2026-08-17 16:44`，仅凭响应无法证明是否额外调用了 `ClockService`，需以该请求对应日志为准，不能把它直接记为工具误调。
     - **观察：模型表述 ≠ 工具返回**——工具返回 `"time":"16:15:30"`（含秒），模型回复省略了秒、把 `Asia/Shanghai` 说成"北京时间"；跨 API 边界的是 **JSON 字段**（`{"date":..,"time":..,"timezone":..}`），模型"解析"的是 JSON 而非 Java 类型（`LocalDateTime`/Record 都不越过边界）。
   - **为什么模型输出 ≠ 工具返回值（"没有秒"问题）**：
     - **链路回顾**：工具返回 `CurrentTimeDto`（序列化成 JSON `{"date":"2026-08-16","time":"16:15:30","timezone":"Asia/Shanghai"}`）→ Spring AI 包成 `ToolResponseMessage` 回喂，作为**输入上下文** → 模型基于"用户问题 + 工具结果"**重新生成**一段自然语言回复。工具结果只是模型的输入，回复是模型的一次全新生成。
@@ -247,13 +246,37 @@ public WeatherViewDto getWeather(String city) {
     - **最有力的证据——回复同时被减损与增补**：减了秒（`16:15:30` → `16:15`），却增了"北京时间"（`timezone:"Asia/Shanghai"` 被转述成口语）与"下午4点15分"。一个方向丢信息、另一个方向加信息，正好证明它是**再生成**而非透传。
     - **工程启示（与 Day39 消毒层同构，两个方向）**：消毒层讲"别靠 Prompt 让模型**别提**敏感字段"（不可靠）；这里同理"别靠模型自觉**复述**精确字段"（也不可靠）。对精度有硬要求的字段（时间戳、订单号、金额），应由**应用层**保证（模板拼接 / 结构化输出 / 提示词显式要求），不能假设模型会原样转述工具结果。
     - **验证方法**：问模型"现在几点几分几秒"——它可能补出秒，也可能仍省略；无论哪种结果，都再次证明"工具返回什么"与"模型说什么"是两件事。
-  - **待补观察（3 次，implement.md 要求 3–5 次）**：③ 跨工具复合（"北京今天天气怎么样？现在几点？"）→ 串行 vs 并行；④ 不该调任何工具（"1+1等于几"）→ 不乱调；⑤ 参数缺失（"今天天气怎么样"没说城市）→ 追问 vs 瞎填参。
 - 产出路径：`tool/tool/ClockService.java`（修订）、`tool/dto/CurrentTimeDto.java`（新增）、`config/OpenAIConfig.java`（装配 + javadoc 同步）、`application.yaml`（日志包名修复）
-- 测试或实验结果：见上表；修复前后 token 对比：Record DTO 比 String 多 4 promptTokens（534 vs 530，三字段 JSON 序列化成本），`completionTokens` 多 9（模型多说了时区）——"结构化返回有极小成本，换来字段级消费"
+- 修复前后 token 对比：Record DTO 比 String 多 4 promptTokens（534 vs 530，三字段 JSON 序列化成本），`completionTokens` 多 9（模型多说了时区）——"结构化返回有极小成本，换来字段级消费"
 - 遇到的问题：
   - 日志 DEBUG 不生效：包名 `springaidemo` 与 `springaichat` 不一致（logger 名精确匹配），已修复；
-  - git 暂存坑：`ClockService` 曾以**空骨架**（仅 package 声明 4 行）暂存、真实代码在工作区，直接 commit 会提交空类——需重新 `git add`（初版提交前差点踩中）。
-- 明日调整：进 Day39 安全面——`ApiKeyInterceptor`（`X-API-Key` 校验失败 401）+ `security.api-keys` 配置外化 + View DTO 消毒验证 + 间接提示注入样本 1–2 个；先补跑 Day38 剩余 3 次观察并补记。
+- Day38 结论：模型在明确问题中能选择单个或多个工具；常识问题不乱调；参数不足时会追问。应用日志能证明实际执行过哪些工具及先后检查点，但不能单独证明模型层的串行/并行调度语义。
+- 明日调整：进 Day39 安全面——`ApiKeyInterceptor`（`X-API-Key` 校验失败 401）+ `security.api-keys` 配置外化 + View DTO 消毒验证 + 间接提示注入样本 1–2 个。
+
+### 2026-08-17（Day39）
+
+- 实际投入：
+- 今日目标：落实工具结果消毒与最小 API Key 鉴权，明确模型决策、应用鉴权和结果消毒三层边界。
+- 完成内容：
+  - **API Key 配置外化**：新增 `ApiKeyProperties`，使用 `@ConfigurationProperties("security")` 绑定 `security.api-keys`；`application.yaml` 通过 `${TOOL_API_KEYS:}` 读取环境变量，不把真实 Key 提交到仓库。配置绑定时会去除首尾空格、过滤 `null`/空白项；白名单为空时默认拒绝全部请求（fail closed）。
+  - **鉴权拦截器**：新增 `ApiKeyInterceptor implements HandlerInterceptor`，从 `X-API-Key` 读取调用者凭证并进行白名单精确匹配；缺失、空字符串或未命中白名单时抛 `UnauthorizedException`。依赖使用构造器注入，不使用字段注入。
+  - **路径装配**：新增 `WebMvcConfig`，只对 `/api/tool` 与 `/api/tool/**` 注册拦截器，当前不改变 week02/04/05 的 `/api/chat` 与 `/api/conversation` 既有契约。
+  - **结构化错误**：`GlobalExceptionHandler` 将 `UnauthorizedException` 映射为 HTTP 401 + `UNAUTHORIZED`，继续复用统一 `ErrorResponse(code, message, timestamp)`，响应中不包含 API Key 或异常堆栈。
+  - **消毒层保持不变并补测试**：`WeatherService` 继续执行 `WeatherDto` → `WeatherViewDto` 白名单映射，模型可见字段仅为城市、温度、湿度、天气、风向、风力和体感温度；`internalSource`、`longitude`、`latitude`、`path` 不进入工具返回结构。
+  - **离线测试补充（10 条）**：`ApiKeyPropertiesTest` 3 条（默认空列表、配置清洗、null 重置）；`ApiKeyInterceptorTest` 5 条（有效 Key 放行、缺失/空/错误 Key 拒绝、空白名单拒绝全部）；`WeatherServiceTest` 1 条（View DTO 不含内部字段）；`GlobalExceptionHandlerAuthorizationTest` 1 条（401 + `UNAUTHORIZED` 结构）。用户执行后反馈测试全部通过。
+- 安全边界结论：
+  - **模型决策层**决定是否调用工具、调用哪个工具以及填写什么参数，但该决策可能受提示注入影响。
+  - **鉴权层**只证明调用者是否有权进入受保护端点；无 Key 请求在进入 Controller、模型和 CMA 之前被阻断。API Key 本身不能防止已认证调用者构造恶意提示。
+  - **消毒层**控制工具执行结果中哪些字段能进入模型上下文。即使已认证用户要求返回内部字段，只要这些字段未出现在 `WeatherViewDto`，模型就无法从工具结果中取得它们。
+  - **Day40 前置风险**：当前鉴权只覆盖 `/api/tool`。若 Day40 直接给 `conversationChatClient` 挂载工具，未受保护的 `/api/conversation` 会形成新的工具入口；进入 Day40 前必须决定是扩展鉴权范围，还是新增独立且受保护的“记忆 + 工具”端点。
+- 测试或实验结果：离线测试全部通过（由用户执行确认）；本次未记录具体 Maven 测试汇总数字。
+- 待完成手动验证（没有结果前不标记完成）：
+  - 无 `X-API-Key` 请求 `/api/tool` → 预期 401 `UNAUTHORIZED`，并通过日志确认模型、`WeatherClient`、`ClockService` 均未调用；
+  - 错误 Key → 预期 401；正确 Key → 预期进入正常工具链；
+  - 无 Key 的注入请求用于验证鉴权前置阻断；有效 Key 的同类请求用于观察模型是否上钩，并验证回复仍不含 `internalSource`/`longitude`/`latitude`/`path`。两次实验不能合并成“API Key 防提示注入”的错误结论。
+- 产出路径：`tool/config/ApiKeyProperties.java`、`tool/interceptor/ApiKeyInterceptor.java`、`tool/exception/UnauthorizedException.java`、`config/WebMvcConfig.java`、`handler/GlobalExceptionHandler.java`、`application.yaml`，以及对应的四个测试类。
+- 遇到的问题：`application.yaml` 初版写成 `api-keys:${TOOL_API_KEYS}`，冒号后缺空格，无法形成预期属性；已修正为 `api-keys: ${TOOL_API_KEYS:}`。新增文件曾处于 `AM` 状态，暂存区仍可能保留空骨架，提交前必须重新暂存并检查 `git diff --cached`。
+- 明日调整：完成三类手动鉴权/注入验证并补记结果；解决 Day40 会话工具入口的鉴权旁路设计后，再进入工具 + 记忆融合。
 
 ## 参考资料
 
